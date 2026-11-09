@@ -1,0 +1,26 @@
+name: mymarkets
+
+services:
+  mymarkets:
+    build: .
+    image: mymarkets-app
+    container_name: mymarkets
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "4080"
+      DATA_DIR: /data
+    ports:
+      - "${PORT:-4080}:4080"
+    volumes:
+      - mymarkets_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:4080/api/health\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  mymarkets_data: {}

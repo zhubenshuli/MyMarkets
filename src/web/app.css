@@ -1,0 +1,199 @@
+@import "tailwindcss";
+@source "./**/*.{ts,tsx,html}";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@custom-variant touch (@media (hover: none));
+
+@theme {
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  --color-bg: var(--bg);
+  --color-bg-sunk: var(--bg-sunk);
+  --color-bg-muted: var(--bg-muted);
+  --color-well: var(--well);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-raised: var(--raised);
+  --color-sidebar: var(--sidebar);
+  --color-daybar: var(--daybar);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-soft: var(--line-soft);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-softer: var(--accent-softer);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-note: var(--note);
+  --color-hot: var(--hot);
+  --color-hot-soft: var(--hot-soft);
+  --color-amber: var(--amber);
+  --color-amber-ink: var(--amber-ink);
+  --color-amber-soft: var(--amber-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-ink: var(--ok-ink);
+
+  --radius-mark: 5px;
+  --radius-control: 8px;
+  --radius-tile: 10px;
+  --radius-card: 12px;
+  --radius-panel: 14px;
+  --radius-sheet: 16px;
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+
+  --breakpoint-sm: 641px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 961px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+}
+
+:root {
+  color-scheme: light;
+  --bg: #faf9f6;
+  --bg-sunk: #f3f3ef;
+  --bg-muted: #e9ede9;
+  --well: var(--bg-sunk);
+  --surface: #ffffff;
+  --surface-2: #fdfdfb;
+  --raised: #ffffff;
+  --sidebar: #fdfdfb;
+  --daybar: #f0f2ee;
+  --ink: #202a30;
+  --ink-2: #303c42;
+  --ink-3: #59656b;
+  --ink-4: #657176;
+  --line: #dfe4e1;
+  --line-strong: #d1d9d5;
+  --line-soft: #e9ede9;
+  --accent: #176b75;
+  --accent-ink: #145f68;
+  --accent-soft: rgba(23, 107, 117, 0.08);
+  --accent-softer: rgba(23, 107, 117, 0.05);
+  --accent-contrast: #ffffff;
+  --note: #526f72;
+  --hot: #b3402a;
+  --hot-soft: rgba(179, 64, 42, 0.08);
+  --amber: #b8873a;
+  --amber-ink: #7c5a24;
+  --amber-soft: rgba(184, 135, 58, 0.1);
+  --ok: #2f7d5c;
+  --ok-soft: rgba(47, 125, 92, 0.1);
+  --ok-ink: #2a6e51;
+  --shadow-card: 0 1px 2px rgba(32, 42, 48, 0.025);
+  --shadow-card-hover: 0 3px 12px rgba(32, 42, 48, 0.055);
+  --shadow-soft: 0 4px 12px rgba(28, 39, 51, 0.06);
+  --shadow-thumb: 0 1px 2px rgba(28, 39, 51, 0.1), 0 1px 1px rgba(28, 39, 51, 0.04);
+  --shadow-pop: 0 12px 32px rgba(28, 39, 51, 0.12);
+  --selection: rgba(23, 107, 117, 0.16);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #13191c;
+  --bg-sunk: #182024;
+  --bg-muted: #202a2f;
+  --well: color-mix(in oklab, var(--bg-muted) 60%, transparent);
+  --surface: #1a2226;
+  --surface-2: #1d272b;
+  --raised: #202a2f;
+  --sidebar: #161e21;
+  --daybar: #182024;
+  --ink: #e7eceb;
+  --ink-2: #d2dada;
+  --ink-3: #a5b0b3;
+  --ink-4: #89979d;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.12);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --accent: #12ccd8;
+  --accent-ink: #2ce2e8;
+  --accent-soft: rgba(18, 204, 216, 0.12);
+  --accent-softer: rgba(18, 204, 216, 0.06);
+  --accent-contrast: #000000;
+  --note: #8fb8a8;
+  --hot: #d86a52;
+  --hot-soft: rgba(216, 106, 82, 0.12);
+  --amber: #d3b26a;
+  --amber-ink: #d3b26a;
+  --amber-soft: rgba(211, 178, 106, 0.12);
+  --ok: #5fc79a;
+  --ok-soft: rgba(95, 199, 154, 0.12);
+  --ok-ink: #7fd1ad;
+  --shadow-card: none;
+  --shadow-card-hover: none;
+  --shadow-soft: 0 6px 18px rgba(0, 0, 0, 0.35);
+  --shadow-thumb: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.45);
+  --selection: rgba(18, 204, 216, 0.22);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  ::selection {
+    background: var(--selection);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-mark);
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: default;
+  }
+}
+
+@layer components {
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+@utility well {
+  background-color: var(--well);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
