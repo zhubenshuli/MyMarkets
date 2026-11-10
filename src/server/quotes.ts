@@ -9,7 +9,9 @@ import {
   getLlmCallsSince,
   getRecentCloses,
   getStoredAnalysis,
+  getDailyFrozenPlan,
   pruneStoredCloses,
+  setDailyFrozenPlan,
   setStoredAnalysis,
   upsertCloses,
 } from "./db.ts";
@@ -2907,17 +2909,36 @@ export async function refreshMarkets(
   if (!isMacro && !opts?.skipAi && (opts?.allowPartial || failed.length === 0)) {
     try {
       const currentData = await readMarkets({ skipAnalysis: true });
+      const todayStr = beijingDate(now);
       if (!isAviation && !isHstech) {
         const analysis = await generatePorkAnalysis(currentData.quotes);
         setStoredAnalysis("markets.pork_analysis", analysis);
+        if (analysis.etfGuidance?.positionPlan) {
+          setDailyFrozenPlan("etf_516670", todayStr, {
+            ...analysis.etfGuidance.positionPlan,
+            frozenDate: todayStr,
+          });
+        }
       }
       if (!isPork && !isHstech) {
         const aviationAnalysis = await generateAviationAnalysis(currentData.quotes);
         setStoredAnalysis("markets.aviation_analysis", aviationAnalysis);
+        if (aviationAnalysis.etfGuidance?.positionPlan) {
+          setDailyFrozenPlan("cea_600115", todayStr, {
+            ...aviationAnalysis.etfGuidance.positionPlan,
+            frozenDate: todayStr,
+          });
+        }
       }
       if (!isPork && !isAviation) {
         const hstechAnalysis = await generateHstechAnalysis(currentData.quotes);
         setStoredAnalysis("markets.hstech_analysis", hstechAnalysis);
+        if (hstechAnalysis.etfGuidance?.positionPlan) {
+          setDailyFrozenPlan("etf_513180", todayStr, {
+            ...hstechAnalysis.etfGuidance.positionPlan,
+            frozenDate: todayStr,
+          });
+        }
       }
     } catch {
       // Non-blocking if analysis persistence encounters transient failure
@@ -3836,7 +3857,20 @@ export async function readMarkets(opts?: { skipAnalysis?: boolean }): Promise<Ma
       return item;
     };
 
+    const todayStr = beijingDate(new Date());
+
     const liveEtfGuidance = computeEtf516670Guidance(quotes);
+    if (liveEtfGuidance.positionPlan) {
+      const frozen = getDailyFrozenPlan("etf_516670", todayStr);
+      if (frozen) {
+        liveEtfGuidance.positionPlan.actionPoints = frozen.actionPoints;
+        liveEtfGuidance.positionPlan.frozenDate = todayStr;
+      } else {
+        liveEtfGuidance.positionPlan.frozenDate = todayStr;
+        setDailyFrozenPlan("etf_516670", todayStr, liveEtfGuidance.positionPlan);
+      }
+    }
+
     try {
       const stored = getStoredAnalysis("markets.pork_analysis");
       if (stored) {
@@ -3861,6 +3895,17 @@ export async function readMarkets(opts?: { skipAnalysis?: boolean }): Promise<Ma
     }
 
     const liveCeaGuidance = computeCea600115Guidance(quotes);
+    if (liveCeaGuidance.positionPlan) {
+      const frozen = getDailyFrozenPlan("cea_600115", todayStr);
+      if (frozen) {
+        liveCeaGuidance.positionPlan.actionPoints = frozen.actionPoints;
+        liveCeaGuidance.positionPlan.frozenDate = todayStr;
+      } else {
+        liveCeaGuidance.positionPlan.frozenDate = todayStr;
+        setDailyFrozenPlan("cea_600115", todayStr, liveCeaGuidance.positionPlan);
+      }
+    }
+
     try {
       const storedAv = getStoredAnalysis("markets.aviation_analysis");
       if (storedAv) {
@@ -3885,6 +3930,16 @@ export async function readMarkets(opts?: { skipAnalysis?: boolean }): Promise<Ma
     }
 
     const liveHstechGuidance = computeEtf513180Guidance(quotes);
+    if (liveHstechGuidance.positionPlan) {
+      const frozen = getDailyFrozenPlan("etf_513180", todayStr);
+      if (frozen) {
+        liveHstechGuidance.positionPlan.frozenDate = todayStr;
+      } else {
+        liveHstechGuidance.positionPlan.frozenDate = todayStr;
+        setDailyFrozenPlan("etf_513180", todayStr, liveHstechGuidance.positionPlan);
+      }
+    }
+
     try {
       const storedHs = getStoredAnalysis("markets.hstech_analysis");
       if (storedHs) {
