@@ -527,14 +527,6 @@ function cleanSectorHeadline(headline: string): string {
   return cleaned;
 }
 
-/** Clean redundant parenthetical notes from buy/sell trigger strings for concise display. */
-function cleanTriggerText(text: string): string {
-  return text
-    .replace(/（MA20[^）]*）/g, "")
-    .replace(/\(MA20[^)]*\)/g, "")
-    .trim();
-}
-
 /** Dedicated Cycle Allocation & Short-term Technical Wave Guidance Section (supports 516670 ETF, 600115 China Eastern & 513180 HSTECH ETF). */
 function Etf516670GuidanceSection({
   etfQuote,
@@ -722,12 +714,11 @@ function Etf516670GuidanceSection({
           )}
         </div>
 
-        {/* Right Column (7 cols): Position Strategy + Buy/Sell Triggers */}
-        <div className="lg:col-span-7 flex flex-col justify-between gap-3">
-          {/* Card 1: Position, Cycle & Wave Strategy */}
-          <div className="rounded-control bg-surface p-3.5 border border-line space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-ink">
+        {/* Right Column (7 cols): Position Strategy + Core Disciplines */}
+        <div className="lg:col-span-7 rounded-control bg-surface p-3.5 border border-line flex flex-col justify-between space-y-3">
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-soft pb-2.5">
+              <span className="inline-flex items-center gap-1.5 text-[13.5px] font-bold text-ink">
                 <svg
                   viewBox="0 0 20 20"
                   fill="none"
@@ -739,67 +730,46 @@ function Etf516670GuidanceSection({
                   <path d="M10 2.5L3 6.25 10 10l7-3.75L10 2.5z" strokeLinejoin="round" />
                   <path d="M3 10l7 3.75L17 10M3 13.75L10 17.5l7-3.75" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                长线底仓与降本策略
+                长线底仓与核心铁律
               </span>
               <span className="rounded bg-accent-soft/70 px-2 py-0.5 text-[12px] font-bold text-accent">
                 {guidance.positionHint}
               </span>
             </div>
-            <p className="text-[12.5px] leading-relaxed text-ink-2">
-              <strong className="text-ink font-semibold">中线底仓：</strong>
-              {guidance.cycleAdvice}
-            </p>
-            {guidance.swingAdvice && (
-              <p className="text-[12.5px] leading-relaxed text-ink-2 border-t border-line-soft pt-1.5">
-                <strong className="text-ink font-semibold">执行纪律：</strong>
-                {guidance.swingAdvice}
+
+            <div className="space-y-2 text-[12.5px] leading-relaxed text-ink-2">
+              <p>
+                <strong className="text-ink font-semibold">中线底仓：</strong>
+                {guidance.cycleAdvice}
               </p>
-            )}
+              {guidance.swingAdvice && (
+                <p className="border-t border-line-soft pt-1.5 text-[12px] text-ink-3">
+                  <strong className="text-ink-2 font-semibold">波段综述：</strong>
+                  {guidance.swingAdvice}
+                </p>
+              )}
+            </div>
           </div>
 
-          {/* Card 2 & 3: Buy / Sell Discipline Triggers */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 flex-1">
-            <div className="rounded-control bg-surface border border-line p-3.5 flex flex-col justify-center">
-              <div className="inline-flex items-center gap-1.5 text-[13px] font-bold text-ok-ink">
-                <svg
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  className="size-4 shrink-0"
-                  aria-hidden="true"
-                >
-                  <path d="M3 14l4.5-4.5 3 3L17 6" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M12.5 6H17v4.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                低吸与加码纪律
-              </div>
-              <ul className="mt-2 space-y-1.5 text-[12.5px] text-ink-2 leading-relaxed list-disc pl-4">
-                {guidance.buyTriggers.slice(0, 3).map((t, idx) => (
-                  <li key={idx}>{cleanTriggerText(t)}</li>
-                ))}
-              </ul>
+          {/* Core Strategic Principles (Zero overlap with action cards below) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 rounded bg-bg-sunk/70 border border-line-soft p-2.5 text-[11.5px]">
+            <div className="flex items-start gap-1.5 text-ink-2">
+              <span className="text-accent shrink-0 font-bold">🛡️ 长线铁律：</span>
+              <span>
+                {isHstech
+                  ? "浮盈超 +25% 分批止盈转入加码池，亏损区间绝不割肉赎回"
+                  : isAviation
+                    ? "底仓不设技术破位止损；单票最高 7,600 股封顶不盲目扩量"
+                    : "底部绝不设技术破位止损；仅当周期顶部评分 <30 才趁上涨减底仓"}
+              </span>
             </div>
-            <div className="rounded-control bg-surface border border-line p-3.5 flex flex-col justify-center">
-              <div className="inline-flex items-center gap-1.5 text-[13px] font-bold text-hot">
-                <svg
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.9"
-                  className="size-4 shrink-0"
-                  aria-hidden="true"
-                >
-                  <path d="M10 2.5l6 2.5v4.5c0 4.1-2.5 7.4-6 8.5-3.5-1.1-6-4.4-6-8.5V5l6-2.5z" strokeLinejoin="round" />
-                  <path d="M10 7v3.5M10 13.5h.01" strokeLinecap="round" />
-                </svg>
-                配对止盈与铁律
-              </div>
-              <ul className="mt-2 space-y-1.5 text-[12.5px] text-ink-2 leading-relaxed list-disc pl-4">
-                {guidance.sellTriggers.slice(0, 3).map((t, idx) => (
-                  <li key={idx}>{cleanTriggerText(t)}</li>
-                ))}
-              </ul>
+            <div className="flex items-start gap-1.5 text-ink-2">
+              <span className="text-ok-ink shrink-0 font-bold">🔄 利润复投：</span>
+              <span>
+                {isHstech
+                  ? "定投自动累计份额，单周跌 ≥6% 或触及强支撑手动加仓"
+                  : `做T差价净利润全额打入利润池（当前 ¥${(plan?.profitPool ?? 0).toFixed(1)}），满 100 股在买点顺带加码转底仓`}
+              </span>
             </div>
           </div>
         </div>
