@@ -248,6 +248,98 @@ export interface PositionPlanDetail {
       reason: string;
     };
   } | null;
+  /** 早盘冻结基准日期（YYYY-MM-DD） */
+  frozenDate?: string;
+  /** 最近一次盘中实时校验结果 */
+  intradayCheck?: IntradayCheckResult | null;
+}
+
+export type IntradayDistanceStatus = "far" | "near" | "reached" | "missed";
+export type IntradayVerdict = "execute" | "hold" | "none";
+
+export interface IntradayChecklistItem {
+  text: string;
+  passed: boolean;
+}
+
+export interface IntradayActionPointCheck {
+  kind: "buy1" | "buy2" | "sell1" | "sell2";
+  label: string;
+  triggerPrice: number | null;
+  currentPrice: number;
+  distancePct: number;
+  distanceStatus: IntradayDistanceStatus;
+  distanceHint: string;
+  verdict: IntradayVerdict;
+  verdictText: string;
+  checklist: IntradayChecklistItem[];
+  ruleReason: string;
+  aiVerdict?: "execute" | "hold";
+  aiReason?: string;
+  recheckCondition?: string;
+}
+
+export interface IntradayDcaLumpSumCheck {
+  currentPrice: number;
+  priceDrop5dPct: number;
+  supportLevel1: number;
+  supportLevel2: number;
+  isInDecisionWindow: boolean;
+  windowHint: string;
+  cooldownPassed: boolean;
+  cooldownNote: string;
+  verdict: IntradayVerdict;
+  verdictText: string;
+  checklist: IntradayChecklistItem[];
+  ruleReason: string;
+  aiVerdict?: "execute" | "hold";
+  aiReason?: string;
+}
+
+export interface IntradayLiveQuoteItem {
+  symbol: string;
+  name: string;
+  price: number;
+  changePct: number;
+}
+
+export type IntradaySessionPhase =
+  | "pre_open"
+  | "morning_trading"
+  | "lunch_break"
+  | "afternoon_trading"
+  | "closing_window"
+  | "post_close";
+
+export interface IntradayLiveContext {
+  symbol: string;
+  name: string;
+  snapshotTime: string;
+  currentPrice: number;
+  yesterdayClose: number;
+  openPrice: number;
+  highPrice: number;
+  lowPrice: number;
+  changePct: number;
+  volumeRatio: number | null;
+  vwap: number | null;
+  iopv: number | null;
+  discountPremiumPct: number | null;
+  intradayPositionPct: number | null;
+  sessionPhase: IntradaySessionPhase;
+  sessionHint: string;
+  relatedQuotes?: IntradayLiveQuoteItem[];
+}
+
+export interface IntradayCheckResult {
+  symbol: PositionTargetSymbol;
+  checkedAt: string;
+  frozenDate: string;
+  liveContext: IntradayLiveContext;
+  actionChecks?: IntradayActionPointCheck[];
+  dcaCheck?: IntradayDcaLumpSumCheck;
+  aiReviewed: boolean;
+  aiModel?: string;
 }
 
 export interface EtfFactorSignal {

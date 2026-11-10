@@ -10,6 +10,7 @@ import {
   updateStrategyConfig,
 } from "./position.ts";
 import { readMarkets, refreshMarkets } from "./quotes.ts";
+import { performIntradayCheck } from "./intraday.ts";
 import { startScheduler, stopScheduler } from "./scheduler.ts";
 import type { MarketCategory, PositionTargetSymbol } from "../shared/types.ts";
 
@@ -102,6 +103,29 @@ export function buildServer() {
           markets,
         }),
       );
+  });
+
+  app.post("/api/markets/intraday-check", async (req, reply) => {
+    const body = (typeof req.body === "object" && req.body !== null ? req.body : {}) as {
+      symbol?: string;
+      forceAi?: boolean;
+    };
+    const symbol = body.symbol as PositionTargetSymbol | undefined;
+    if (!symbol || !["etf_516670", "cea_600115", "etf_513180"].includes(symbol)) {
+      return reply.code(400).send({ error: "Invalid or missing symbol for intraday check" });
+    }
+    try {
+      const result = await performIntradayCheck(symbol, { forceAi: body.forceAi });
+      return reply
+        .header("Content-Type", "application/json; charset=utf-8")
+        .header("Cache-Control", "no-store")
+        .send(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      req.log.error(error, "Failed to perform intraday check");
+      return reply.code(500).send({
+        error: error instanceof Error ? error.message : "Internal server error during intraday check",
+      });
+    }
   });
 
   app.get("/api/llm/channels", async (req, reply) => {

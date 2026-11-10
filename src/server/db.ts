@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { LlmChannelQuotaInfo, PorkMarketAnalysis } from "../shared/types.ts";
+import type { LlmChannelQuotaInfo, PorkMarketAnalysis, PositionPlanDetail } from "../shared/types.ts";
 
 export interface StoredChannelState {
   consecutiveFailures: number;
@@ -124,6 +124,13 @@ export function getDb(): DatabaseSync {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS daily_frozen_plans (
+      symbol TEXT NOT NULL,
+      day TEXT NOT NULL,
+      plan_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (symbol, day)
+    );
   `);
   const cols = db.prepare("PRAGMA table_info(market_daily_closes)").all() as Array<{ name: string }>;
   const colNames = new Set(cols.map((c) => c.name));
@@ -144,7 +151,7 @@ export function closeDb(): void {
 export function clearDb(): void {
   const db = getDb();
   db.exec(
-    "DELETE FROM market_daily_closes; DELETE FROM market_analyses; DELETE FROM llm_calls; DELETE FROM llm_channel_states; DELETE FROM position_snapshots; DELETE FROM position_strategy_states;",
+    "DELETE FROM market_daily_closes; DELETE FROM market_analyses; DELETE FROM llm_calls; DELETE FROM llm_channel_states; DELETE FROM position_snapshots; DELETE FROM position_strategy_states; DELETE FROM daily_frozen_plans;",
   );
 }
 
@@ -514,5 +521,28 @@ export function setStoredStrategyConfig(symbol: string, config: StoredStrategyCo
     ON CONFLICT (symbol) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `).run(symbol, JSON.stringify(config), new Date().toISOString());
 }
+
+export function getDailyFrozenPlan(symbol: string, day: string): PositionPlanDetail | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT plan_json FROM daily_frozen_plans WHERE symbol = ? AND day = ?")
+    .get(symbol, day) as { plan_json: string } | undefined;
+  if (!row?.plan_json) return null;
+  try {
+    return JSON.parse(row.plan_json) as PositionPlanDetail;
+  } catch {
+    return null;
+  }
+}
+
+export function setDailyFrozenPlan(symbol: string, day: string, plan: PositionPlanDetail): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO daily_frozen_plans (symbol, day, plan_json, created_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (symbol, day) DO UPDATE SET plan_json = excluded.plan_json, created_at = excluded.created_at
+  `).run(symbol, day, JSON.stringify(plan), new Date().toISOString());
+}
+
 
 

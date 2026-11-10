@@ -8,11 +8,20 @@ import {
   clearDb,
   closeDb,
   countClosesBySymbol,
+  getDailyFrozenPlan,
   getDistinctSymbols,
   getStoredAnalysis,
   insertLlmCall,
+  setDailyFrozenPlan,
   setStoredAnalysis,
 } from "../src/server/db.ts";
+import {
+  evaluateDcaLumpSumRules,
+  evaluateGridActionPointRules,
+  getIntradaySessionPhase,
+  parseTencentQuotes,
+  reviewIntradayWithAi,
+} from "../src/server/intraday.ts";
 import {
   getChannelsOverview,
   loadChannels,
@@ -1075,6 +1084,270 @@ test("intraday OHLCV klines and leading sector indicators (002714, 300498, hk006
   assert.ok(kuaishouBench.anchorText.includes("可灵AI"));
   assert.equal(kuaishouBench.statusBadge, "领涨超额阿尔法");
 });
+
+test("intraday verification: early baseline freezing in daily_frozen_plans", () => {
+  clearDb();
+  const symbol = "etf_516670";
+  const today = "2026-11-10";
+
+  assert.equal(getDailyFrozenPlan(symbol, today), null);
+
+  const mockPlan = {
+    symbol: "etf_516670" as const,
+    mode: "grid" as const,
+    cycleState: "recovery" as const,
+    cycleStateLabel: "周期底部修复",
+    cycleStateTone: "positive" as const,
+    buyMultiplier: 1.0,
+    cycleConfirmNote: "测试",
+    latestSnapshot: {
+      id: 1,
+      symbol: "etf_516670" as const,
+      day: "2026-11-09",
+      shares: 14400,
+      marketValue: 8798.4,
+      unrealizedPnl: 507.84,
+      dilutedCost: 0.5757,
+      totalCost: 8290.56,
+      pnlPct: 0.061,
+      inferredTrade: "初始",
+      createdAt: "2026-11-09T15:00:00.000Z",
+    },
+    snapshots: [],
+    costCurve: [],
+    costDeltaPct: 0,
+    profitPool: 42.2,
+    profitBonusReadyShares: 0,
+    lotCost100: 59.1,
+    baseCoreShares: 10400,
+    bonusCoreShares: 0,
+    totalCoreShares: 10400,
+    coreTargetHint: "底仓锁仓",
+    actionPoints: [
+      {
+        kind: "buy1" as const,
+        label: "第一买点 · 回踩支撑低吸",
+        triggerPrice: 0.591,
+        distancePct: -0.033,
+        shares: 1000,
+        retainShares: 0,
+        cashAmount: 591,
+        estimatedNetProfit: null,
+        projectedDilutedCost: 0.5767,
+        technicalAnchor: "MA20",
+        fundamentalReason: "能繁存栏",
+      },
+    ],
+  };
+
+  setDailyFrozenPlan(symbol, today, mockPlan);
+  const retrieved = getDailyFrozenPlan(symbol, today);
+  assert.ok(retrieved);
+  assert.equal(retrieved.actionPoints?.[0]?.triggerPrice, 0.591);
+  assert.equal(retrieved.profitPool, 42.2);
+
+  clearDb();
+  assert.equal(getDailyFrozenPlan(symbol, today), null);
+});
+
+test("intraday verification: Tencent qt.gtimg.cn quote parsing & session detection", () => {
+  const sampleTencent = `v_sh516670="1~畜牧养殖ETF招商~516670~0.609~0.611~0.611~591377~333615~257762~0.609~1536~0.000~0~0.000~0~0.000~0~0.000~0~0.000~0~0.000~0~0.000~0~0.000~0~0.000~0~~20261110152712~-0.002~-0.33~0.612~0.607~0.609/591377/36056210~591377~3606~1.71~~~0.612~0.607~0.82~21.05~21.05~0.00~0.672~0.550~0.71~1536~0.610~~~~~~3605.6210~0.2436~40~   B~ETF~-13.74~1.50~~~~0.755~0.529~3.75~3.22~-0.98~3457266300~3457266300~100.00~-13.12~3457266300~-0.21~0.6103~-17.26~-0.16~0.6122~CNY~0~___D__F__N~0.000~0~";
+v_sz002714="51~牧原股份~002714~44.57~44.55~44.29~219360~106738~112621~44.57~125~0.00~0~0.00~0~0.00~0~0.00~0~44.57~0~0.00~0~0.00~0~0.00~0~0.00~0~~20261110152700~0.02~0.04~44.69~44.10~44.57/219360/973856741~219360~97386~0.67~-29.88~~44.69~44.10~1.32~1462.14~2573.02~3.36~49.01~40.10~0.47~125~44.40~-20.71~16.61~~~0.46~97385.6741~32.9818~74~   B~GP-A~-11.14~3.63~0.95~-11.11~-4.91~51.43~31.81~7.53~8.97~10.76~3280544551~5772996148~100.00~-3.08~3280544551~~~-13.03~0.00~~CNY~0~~0.00~0~";`;
+
+  const quotes = parseTencentQuotes(sampleTencent);
+  const etf = quotes.sh516670;
+  assert.ok(etf);
+  assert.equal(etf.code, "sh516670");
+  assert.equal(etf.name, "畜牧养殖ETF招商");
+  assert.equal(etf.price, 0.609);
+  assert.equal(etf.prevClose, 0.611);
+  assert.equal(etf.timeStr, "15:27:12");
+  assert.equal(etf.changePct, -0.0033);
+  assert.equal(etf.volumeRatio, 0.71);
+  assert.equal(etf.vwap, 0.61);
+  assert.equal(etf.iopv, 0.6103);
+  assert.equal(etf.discountPremiumPct, -0.0021);
+  assert.ok(etf.intradayPositionPct !== null && etf.intradayPositionPct >= 0 && etf.intradayPositionPct <= 1);
+
+  // Session detection checks
+  assert.equal(getIntradaySessionPhase("09:15").phase, "pre_open");
+  assert.equal(getIntradaySessionPhase("09:45").phase, "morning_trading");
+  assert.equal(getIntradaySessionPhase("12:00").phase, "lunch_break");
+  assert.equal(getIntradaySessionPhase("13:45").phase, "afternoon_trading");
+  assert.equal(getIntradaySessionPhase("14:35").phase, "closing_window");
+  assert.equal(getIntradaySessionPhase("15:05").phase, "post_close");
+});
+
+test("intraday verification: grid action points evaluation (buy1/buy2/sell1/sell2 rules)", () => {
+  const frozenPlan: any = {
+    symbol: "etf_516670",
+    actionPoints: [
+      {
+        kind: "buy1",
+        label: "第一买点 · 回踩支撑低吸",
+        triggerPrice: 0.591,
+        shares: 1000,
+        retainShares: 0,
+        cashAmount: 591,
+      },
+      {
+        kind: "buy2",
+        label: "第二买点 · 强支撑大跌加码",
+        triggerPrice: 0.559,
+        shares: 3000,
+        retainShares: 1500,
+        cashAmount: 1677,
+      },
+      {
+        kind: "sell1",
+        label: "第一卖点 · 近期压力做T",
+        triggerPrice: 0.618,
+        shares: 1000,
+        retainShares: 0,
+        cashAmount: 618,
+      },
+      {
+        kind: "sell2",
+        label: "第二卖点 · 脉冲冲高止盈",
+        triggerPrice: 0.632,
+        shares: 1500,
+        retainShares: 0,
+        cashAmount: 948,
+      },
+    ],
+  };
+
+  // Case 1: Buy1 reached, but during opening noise 09:35 -> HOLD
+  const noiseContext: any = {
+    currentPrice: 0.590,
+    yesterdayClose: 0.600,
+    changePct: -0.016,
+    vwap: 0.592,
+    volumeRatio: 1.1,
+    intradayPositionPct: 0.3,
+    discountPremiumPct: -0.001,
+    lowPrice: 0.590,
+    highPrice: 0.605,
+    relatedQuotes: [{ symbol: "sz002714", changePct: -0.005 }],
+  };
+  const noiseChecks = evaluateGridActionPointRules("etf_516670", noiseContext, frozenPlan, "09:35");
+  const buy1Noise = noiseChecks.find((c) => c.kind === "buy1")!;
+  assert.equal(buy1Noise.distanceStatus, "reached");
+  assert.equal(buy1Noise.verdict, "hold");
+  assert.ok(buy1Noise.ruleReason.includes("开盘乱波期"));
+  assert.ok(buy1Noise.recheckCondition);
+
+  // Case 2: Buy1 reached at 10:30 with gentle pullback -> EXECUTE
+  const gentleContext: any = {
+    currentPrice: 0.591,
+    yesterdayClose: 0.600,
+    changePct: -0.015,
+    vwap: 0.591,
+    volumeRatio: 0.8,
+    intradayPositionPct: 0.35,
+    discountPremiumPct: -0.002,
+    lowPrice: 0.590,
+    highPrice: 0.602,
+    relatedQuotes: [{ symbol: "sz002714", changePct: 0.005 }],
+  };
+  const gentleChecks = evaluateGridActionPointRules("etf_516670", gentleContext, frozenPlan, "10:30");
+  const buy1Gentle = gentleChecks.find((c) => c.kind === "buy1")!;
+  assert.equal(buy1Gentle.distanceStatus, "reached");
+  assert.equal(buy1Gentle.verdict, "execute");
+  assert.ok(buy1Gentle.ruleReason.includes("按计划执行"));
+
+  // Case 3: Sell1 reached at 10:30, but leaders surging +5.2% and price > VWAP -> HOLD (惜售防卖飞)
+  const surgeContext: any = {
+    currentPrice: 0.619,
+    yesterdayClose: 0.600,
+    changePct: 0.0317,
+    vwap: 0.615,
+    volumeRatio: 2.1,
+    intradayPositionPct: 0.85,
+    discountPremiumPct: 0.002,
+    lowPrice: 0.598,
+    highPrice: 0.620,
+    relatedQuotes: [{ symbol: "sz002714", changePct: 0.052 }],
+  };
+  const surgeChecks = evaluateGridActionPointRules("etf_516670", surgeContext, frozenPlan, "10:30");
+  const sell1Surge = surgeChecks.find((c) => c.kind === "sell1")!;
+  assert.equal(sell1Surge.distanceStatus, "reached");
+  assert.equal(sell1Surge.verdict, "hold");
+  assert.ok(sell1Surge.ruleReason.includes("惜售保护防卖飞"));
+
+  // Case 4: Sell2 reached -> EXECUTE
+  const sell2Context: any = {
+    currentPrice: 0.633,
+    yesterdayClose: 0.600,
+    changePct: 0.055,
+    vwap: 0.625,
+    volumeRatio: 2.5,
+    intradayPositionPct: 0.95,
+    discountPremiumPct: 0.003,
+    lowPrice: 0.600,
+    highPrice: 0.635,
+    relatedQuotes: [],
+  };
+  const sell2Checks = evaluateGridActionPointRules("etf_516670", sell2Context, frozenPlan, "14:15");
+  const sell2Pt = sell2Checks.find((c) => c.kind === "sell2")!;
+  assert.equal(sell2Pt.distanceStatus, "reached");
+  assert.equal(sell2Pt.verdict, "execute");
+});
+
+test("intraday verification: Hang Seng Tech 513180 14:30 lump sum decision tree", () => {
+  clearDb();
+
+  // Case 1: Normal trading hours, not reaching support (price 0.510) -> HOLD
+  const normalCtx: any = {
+    currentPrice: 0.510,
+    relatedQuotes: [{ symbol: "hkHSTECH", changePct: -0.01 }],
+  };
+  const res1 = evaluateDcaLumpSumRules(normalCtx, "10:30");
+  assert.equal(res1.isInDecisionWindow, false);
+  assert.equal(res1.verdict, "hold");
+  assert.ok(res1.ruleReason.includes("未达大跌强支撑位"));
+
+  // Case 2: In 14:30–14:55 window, price drops to 0.455 (<= 0.458) with no prior lump sum -> EXECUTE
+  const reachedCtx: any = {
+    currentPrice: 0.455,
+    relatedQuotes: [{ symbol: "hkHSTECH", changePct: -0.015 }],
+  };
+  const res2 = evaluateDcaLumpSumRules(reachedCtx, "14:40");
+  assert.equal(res2.isInDecisionWindow, true);
+  assert.equal(res2.verdict, "execute");
+  assert.ok(res2.ruleReason.includes("今日 15:00 前建议在券商/天天基金手动追加单笔 ¥1,000"));
+
+  // Case 3: Reached 0.455, but added 2 days ago and price not below 0.440 -> HOLD (cooldown lock)
+  recordPositionSnapshot({
+    symbol: "etf_513180",
+    marketValue: 17756,
+    unrealizedPnl: -2500,
+    note: "大跌强支撑单独加仓 ¥1,000",
+  });
+  const res3 = evaluateDcaLumpSumRules(reachedCtx, "14:40");
+  assert.equal(res3.cooldownPassed, false);
+  assert.equal(res3.verdict, "hold");
+  assert.ok(res3.ruleReason.includes("保持防连跌冷却锁"));
+});
+
+test("intraday verification: AI review layer skips remote calls when all points are far", async () => {
+  const farChecks: any[] = [
+    { kind: "buy1", distanceStatus: "far", verdict: "none" },
+    { kind: "buy2", distanceStatus: "far", verdict: "none" },
+    { kind: "sell1", distanceStatus: "far", verdict: "none" },
+    { kind: "sell2", distanceStatus: "far", verdict: "none" },
+  ];
+  const liveCtx: any = {
+    symbol: "sh516670",
+    name: "畜牧养殖ETF",
+    snapshotTime: "10:30:00",
+    currentPrice: 0.611,
+  };
+
+  const aiReview = await reviewIntradayWithAi("etf_516670", liveCtx, farChecks);
+  assert.equal(aiReview.reviewed, false);
+});
+
 
 
 

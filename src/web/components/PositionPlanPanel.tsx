@@ -2,6 +2,10 @@ import { useState } from "react";
 import { monthDay } from "../../shared/time.ts";
 import type {
   CostCurvePoint,
+  IntradayActionPointCheck,
+  IntradayCheckResult,
+  IntradayDcaLumpSumCheck,
+  IntradayLiveContext,
   MarketsAnswer,
   PorkStatusTone,
   PositionPlanDetail,
@@ -150,6 +154,128 @@ export function DilutedCostChart({
   );
 }
 
+function IntradayActionCardSection({ check }: { check?: IntradayActionPointCheck }) {
+  if (!check) return null;
+  const isExec = check.verdict === "execute";
+  const isHold = check.verdict === "hold";
+
+  return (
+    <div className="mt-2.5 pt-2 border-t border-line-soft/90 space-y-1.5">
+      {/* 1. Status bar & verdict */}
+      <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11.5px]">
+        <span className="font-semibold text-ink-2">
+          🎯 盘中校验 · {check.distanceHint}
+        </span>
+        <span
+          className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-bold border ${
+            isExec
+              ? "bg-ok text-white border-ok shadow-2xs"
+              : isHold
+                ? "bg-amber text-white border-amber shadow-2xs"
+                : "bg-bg-sunk text-ink-3 border-line"
+          }`}
+        >
+          {check.verdictText}
+        </span>
+      </div>
+
+      {/* 2. Checklist pills */}
+      {check.checklist && check.checklist.length > 0 && (
+        <div className="flex flex-wrap gap-1 text-[10.5px]">
+          {check.checklist.map((item, idx) => (
+            <span
+              key={idx}
+              className={`rounded px-1.5 py-0.2 border ${
+                item.passed
+                  ? "bg-ok-soft text-ok-ink border-ok/30"
+                  : "bg-amber-soft text-amber-ink border-amber/30"
+              }`}
+            >
+              {item.passed ? "✓" : "⚠"} {item.text}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* 3. Reason or Recheck Condition */}
+      <div className="text-[11px] leading-snug text-ink-3">
+        <span>{check.ruleReason}</span>
+        {check.recheckCondition && (
+          <div className="mt-0.5 text-amber-ink font-medium">
+            ⏱ 恢复条件：{check.recheckCondition}
+          </div>
+        )}
+      </div>
+
+      {/* 4. AI Review diagnostic if available */}
+      {check.aiReason && (
+        <div className="rounded bg-surface/90 border border-line-soft p-1.5 text-[11px] text-ink-2 leading-relaxed">
+          <span className="font-semibold text-accent">💡 AI 复核：</span>
+          {check.aiReason}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntradayDcaSection({
+  check,
+}: {
+  check?: IntradayDcaLumpSumCheck;
+}) {
+  if (!check) return null;
+  const isExec = check.verdict === "execute";
+
+  return (
+    <div className="mt-2.5 rounded-control border border-accent/40 bg-accent-softer p-3 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[13px] font-bold text-ink">
+            🎯 场外 15:00 申购截止前决策
+          </span>
+          <span className="text-[11px] text-ink-3">({check.windowHint})</span>
+        </div>
+        <span
+          className={`rounded px-2.5 py-0.5 text-[12px] font-bold border ${
+            isExec
+              ? "bg-ok text-white border-ok"
+              : "bg-amber text-white border-amber"
+          }`}
+        >
+          {check.verdictText}
+        </span>
+      </div>
+
+      {/* Checklist pills */}
+      <div className="flex flex-wrap gap-1.5 text-[11px]">
+        {check.checklist.map((item, idx) => (
+          <span
+            key={idx}
+            className={`rounded px-2 py-0.5 border ${
+              item.passed
+                ? "bg-ok-soft text-ok-ink border-ok/30"
+                : "bg-amber-soft text-amber-ink border-amber/30"
+            }`}
+          >
+            {item.passed ? "✓" : "⚠"} {item.text}
+          </span>
+        ))}
+      </div>
+
+      <div className="text-[11.5px] text-ink-2 leading-relaxed">
+        {check.ruleReason}
+      </div>
+
+      {check.aiReason && (
+        <div className="rounded bg-surface/90 border border-line-soft p-2 text-[11.5px] text-ink-2 leading-relaxed">
+          <span className="font-semibold text-accent">💡 AI 复核：</span>
+          {check.aiReason}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PositionPlanPanel({
   plan,
   currentPrice,
@@ -174,6 +300,34 @@ export function PositionPlanPanel({
   const [noteInput, setNoteInput] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ text: string; isError?: boolean } | null>(null);
+
+  const [intradayResult, setIntradayResult] = useState<IntradayCheckResult | null>(
+    plan.intradayCheck ?? null,
+  );
+  const [intradayLoading, setIntradayLoading] = useState(false);
+  const [intradayError, setIntradayError] = useState<string | null>(null);
+
+  const handleIntradayCheck = async () => {
+    setIntradayLoading(true);
+    setIntradayError(null);
+    try {
+      const res = await fetch("/api/markets/intraday-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: plan.symbol }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const json = (await res.json()) as { ok: boolean; result: IntradayCheckResult };
+      setIntradayResult(json.result);
+    } catch (err) {
+      setIntradayError((err as Error).message || "盘中校验请求失败");
+    } finally {
+      setIntradayLoading(false);
+    }
+  };
 
   const openFormWithCurrent = () => {
     setSharesInput(latest.shares !== null ? String(latest.shares) : "");
@@ -650,46 +804,139 @@ export function PositionPlanPanel({
 
       {/* 5b. Live Technical & Fundamental Pricing Basis Banner */}
       {plan.technicalContext && (
-        <div className="rounded-control border border-line bg-bg-sunk/70 p-2.5 space-y-1.5">
+        <div className="rounded-control border border-line bg-bg-sunk/70 p-2.5 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11.5px]">
-            <span className="font-bold text-ink">
-              📊 实时数据定价基准（不预测远期长表，仅滚动计算当下下一步）
-            </span>
-            <div className="num flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
-              <span>
-                现价 <strong className="text-ink">¥{plan.technicalContext.currentPrice.toFixed(decimals)}</strong>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-ink">
+                📊 实时数据定价基准
               </span>
-              <span>·</span>
-              <span>
-                MA20 <strong className="text-ink">¥{plan.technicalContext.ma20.toFixed(decimals)}</strong> (
-                {plan.technicalContext.ma20DiffPct >= 0 ? "+" : ""}
-                {(plan.technicalContext.ma20DiffPct * 100).toFixed(2)}%)
-              </span>
-              <span>·</span>
-              <span>
-                近20日{plan.technicalContext.intradaySource === "high-low" ? "盘中" : ""}支撑/压力{" "}
-                <strong className="text-ok-ink">¥{plan.technicalContext.low20d.toFixed(decimals)}</strong> ～{" "}
-                <strong className="text-hot">¥{plan.technicalContext.high20d.toFixed(decimals)}</strong>
-              </span>
-              <span>·</span>
-              <span>
-                60日强支撑 <strong className="text-ink">¥{plan.technicalContext.low60d.toFixed(decimals)}</strong>
-              </span>
-              {plan.technicalContext.volumeSignal && (
-                <>
-                  <span>·</span>
-                  <span>
-                    量能 <strong className="text-ink">{plan.technicalContext.volumeSignal}</strong>
-                  </span>
-                </>
+              {plan.frozenDate && (
+                <span className="rounded bg-surface px-1.5 py-0.2 border border-line-soft text-[10.5px] font-medium text-ink-3">
+                  基准点位已于 {plan.frozenDate} 早盘冻结
+                </span>
               )}
             </div>
+
+            <div className="flex items-center gap-2">
+              {intradayError && (
+                <span className="text-[11px] text-hot font-semibold">{intradayError}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleIntradayCheck()}
+                disabled={intradayLoading}
+                className="inline-flex items-center gap-1 rounded-control bg-accent px-2.5 py-1 text-[11px] font-semibold text-accent-contrast shadow-xs hover:opacity-90 transition-opacity disabled:opacity-60"
+              >
+                {intradayLoading ? (
+                  <>
+                    <span className="inline-block size-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <span>校验中...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>⚡ {isDca ? "14:30 尾盘加仓校验" : "盘中实时校验"}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
+
+          <div className="num flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+            <span>
+              现价 <strong className="text-ink">¥{plan.technicalContext.currentPrice.toFixed(decimals)}</strong>
+            </span>
+            <span>·</span>
+            <span>
+              MA20 <strong className="text-ink">¥{plan.technicalContext.ma20.toFixed(decimals)}</strong> (
+              {plan.technicalContext.ma20DiffPct >= 0 ? "+" : ""}
+              {(plan.technicalContext.ma20DiffPct * 100).toFixed(2)}%)
+            </span>
+            <span>·</span>
+            <span>
+              近20日{plan.technicalContext.intradaySource === "high-low" ? "盘中" : ""}支撑/压力{" "}
+              <strong className="text-ok-ink">¥{plan.technicalContext.low20d.toFixed(decimals)}</strong> ～{" "}
+              <strong className="text-hot">¥{plan.technicalContext.high20d.toFixed(decimals)}</strong>
+            </span>
+            <span>·</span>
+            <span>
+              60日强支撑 <strong className="text-ink">¥{plan.technicalContext.low60d.toFixed(decimals)}</strong>
+            </span>
+            {plan.technicalContext.volumeSignal && (
+              <>
+                <span>·</span>
+                <span>
+                  量能 <strong className="text-ink">{plan.technicalContext.volumeSignal}</strong>
+                </span>
+              </>
+            )}
+          </div>
+
           <div className="text-[11.5px] leading-relaxed text-ink-2">
             <span className="font-semibold text-accent">行业基本面驱动：</span>
             {plan.technicalContext.fundamentalDriveSummary}
           </div>
+
+          {intradayResult && (
+            <div className="mt-1.5 pt-2 border-t border-line-soft/80 flex flex-col gap-1.5 text-[11.5px]">
+              <div className="flex flex-wrap items-center gap-2 text-ink-3">
+                <span className="num rounded bg-surface px-1.5 py-0.5 border border-line-soft font-semibold text-ink">
+                  {intradayResult.liveContext.snapshotTime} 盘口快照
+                </span>
+                <span className="rounded bg-accent-soft px-1.5 py-0.5 border border-accent/30 text-[11px] font-bold text-accent-ink">
+                  {intradayResult.liveContext.sessionHint}
+                </span>
+                <span>
+                  现价 <strong className="text-ink">¥{intradayResult.liveContext.currentPrice.toFixed(decimals)}</strong>
+                  <span className={`ml-1 font-semibold ${intradayResult.liveContext.changePct >= 0 ? "text-hot" : "text-ok"}`}>
+                    ({intradayResult.liveContext.changePct >= 0 ? "+" : ""}
+                    {(intradayResult.liveContext.changePct * 100).toFixed(2)}%)
+                  </span>
+                </span>
+                {intradayResult.liveContext.vwap !== null && (
+                  <span>
+                    · 分时均价 <strong className="text-ink">¥{intradayResult.liveContext.vwap.toFixed(decimals)}</strong>
+                  </span>
+                )}
+                {intradayResult.liveContext.volumeRatio !== null && (
+                  <span>
+                    · 量比 <strong className="text-ink">{intradayResult.liveContext.volumeRatio.toFixed(2)}x</strong>
+                  </span>
+                )}
+                {intradayResult.liveContext.iopv !== null && (
+                  <span>
+                    · IOPV <strong className="text-ink">¥{intradayResult.liveContext.iopv.toFixed(decimals)}</strong>
+                    {intradayResult.liveContext.discountPremiumPct !== null && (
+                      <span className="ml-1 text-[11px] text-ink-3">
+                        ({intradayResult.liveContext.discountPremiumPct >= 0 ? "溢价" : "折价"}
+                        {(intradayResult.liveContext.discountPremiumPct * 100).toFixed(2)}%)
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+
+              {intradayResult.liveContext.relatedQuotes && intradayResult.liveContext.relatedQuotes.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+                  <span className="font-semibold text-ink-2">同板块盘中联动：</span>
+                  {intradayResult.liveContext.relatedQuotes.map((r) => (
+                    <span key={r.symbol} className="rounded bg-bg-sunk px-1.5 py-0.2 border border-line-soft">
+                      {r.name}{" "}
+                      <strong className={r.changePct >= 0 ? "text-hot" : "text-ok"}>
+                        {r.changePct >= 0 ? "+" : ""}
+                        {(r.changePct * 100).toFixed(1)}%
+                      </strong>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
+      )}
+
+      {/* 5c. OTC Hang Seng Tech Intraday Lump Sum Decision Banner */}
+      {isDca && intradayResult?.dcaCheck && (
+        <IntradayDcaSection check={intradayResult.dcaCheck} />
       )}
 
       {/* 6. Data-Driven Immediate Action Cards (2 Buy + 2 Sell) OR Smart DCA Tiers Table */}
@@ -786,6 +1033,10 @@ export function PositionPlanPanel({
                           {pt.fundamentalReason}
                         </div>
                       </div>
+
+                      <IntradayActionCardSection
+                        check={intradayResult?.actionChecks?.find((c) => c.kind === pt.kind)}
+                      />
                     </div>
                   );
                 })}
@@ -875,6 +1126,10 @@ export function PositionPlanPanel({
                           {pt.fundamentalReason}
                         </div>
                       </div>
+
+                      <IntradayActionCardSection
+                        check={intradayResult?.actionChecks?.find((c) => c.kind === pt.kind)}
+                      />
                     </div>
                   );
                 })}
