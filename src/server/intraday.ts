@@ -600,15 +600,18 @@ export function evaluateDcaLumpSumRules(
   };
 }
 
-const IntradayGridAiReviewSchema = z.object({
-  reviews: z.array(
-    z.object({
-      kind: z.enum(["buy1", "buy2", "sell1", "sell2"]),
-      aiVerdict: z.enum(["execute", "hold"]),
-      aiReason: z.string().describe("45字以内的一句话简明复核理由"),
-    }),
-  ),
+const GridReviewItemSchema = z.object({
+  kind: z.enum(["buy1", "buy2", "sell1", "sell2"]),
+  aiVerdict: z.enum(["execute", "hold"]),
+  aiReason: z.string().describe("45字以内的一句话简明复核理由"),
 });
+
+const IntradayGridAiReviewSchema = z.union([
+  z.object({
+    reviews: z.array(GridReviewItemSchema),
+  }),
+  z.array(GridReviewItemSchema).transform((arr) => ({ reviews: arr })),
+]);
 
 const IntradayDcaAiReviewSchema = z.object({
   aiVerdict: z.enum(["execute", "hold"]),
@@ -692,9 +695,16 @@ ${activeChecks
   )
   .join("\n")}
 
-请针对上述点位逐一复核：
-- aiVerdict: "execute" 或 "hold"
-- aiReason: 45字以内的一句话盘中诊断，直接指导操作`;
+请针对上述点位逐一复核，必须输出如下 JSON 格式：
+{
+  "reviews": [
+    {
+      "kind": "点位名称如 sell1 或 buy1",
+      "aiVerdict": "execute" 或 "hold",
+      "aiReason": "45字以内的一句话盘中诊断，直接指导操作"
+    }
+  ]
+}`;
 
       const aiRes = await chatJson({
         system: "你只输出严格符合 JSON Schema 的投资复核结论，理由务必精炼硬核，控制在45字以内。",
