@@ -1348,6 +1348,66 @@ test("intraday verification: AI review layer skips remote calls when all points 
   assert.equal(aiReview.reviewed, false);
 });
 
+test("position plan optimizations: drawdown paired-swing sell1, extended rally MA10 buy1, breakout resistance upgrade, and frozen-plan sync", () => {
+  clearDb();
+
+  // 1. Extended rally (> +3.8% above MA20) anchors buy1 to MA10 / -3.2% cap instead of dropping all the way to MA20
+  const rallySeries = [
+    ...Array.from({ length: 10 }, (_, i) => ({ day: addDays("2026-10-20", i), close: 0.580 })),
+    ...Array.from({ length: 10 }, (_, i) => ({ day: addDays("2026-10-30", i), close: 0.625 })),
+  ];
+  const rallyPlan = compute516670PositionPlan(
+    { symbol: "etf_516670", price: 0.635, changeYesterday: 0.015, series: rallySeries },
+    85,
+    62,
+  );
+  const rallyBuy1 = rallyPlan.actionPoints?.find((p) => p.kind === "buy1")!;
+  const rallySell1 = rallyPlan.actionPoints?.find((p) => p.kind === "sell1")!;
+  assert.ok(
+    rallyBuy1.triggerPrice! > rallyPlan.technicalContext!.ma20,
+    "when price is far above MA20, buy1 steps up to MA10 / shallow pullback rather than dropping all the way to MA20",
+  );
+  assert.ok(
+    rallySell1.technicalAnchor.includes("突破20日前高"),
+    "when currentPrice is at/above 20d high, sell1 resistance upgrades to 60d/volatility upper band",
+  );
+
+  // 2. Deep drawdown paired-swing anti-deadlock + frozen plan invalidation on snapshot update
+  setDailyFrozenPlan("etf_516670", "2026-11-11", rallyPlan);
+  assert.ok(getDailyFrozenPlan("etf_516670", "2026-11-11"));
+
+  // Record a dip buy of 1,000 shares at 0.540 (total shares 15,400, totalCost = 8290.56 + 540 = 8830.56)
+  recordPositionSnapshot({
+    symbol: "etf_516670",
+    day: "2026-11-11",
+    shares: 15400,
+    marketValue: 8316.0, // 15400 * 0.540
+    unrealizedPnl: -514.56,
+    note: "回踩0.540买入1000股",
+  });
+  assert.equal(
+    getDailyFrozenPlan("etf_516670", "2026-11-11"),
+    null,
+    "recording a new position snapshot automatically invalidates stale daily frozen plan",
+  );
+
+  const drawdownSeries = [
+    ...Array.from({ length: 10 }, (_, i) => ({ day: addDays("2026-10-20", i), close: 0.600 })),
+    ...Array.from({ length: 10 }, (_, i) => ({ day: addDays("2026-10-30", i), close: 0.552 })),
+  ];
+  const drawdownPlan = compute516670PositionPlan(
+    { symbol: "etf_516670", price: 0.542, changeYesterday: -0.005, series: drawdownSeries },
+    85,
+    62,
+  );
+  const ddSell1 = drawdownPlan.actionPoints?.find((p) => p.kind === "sell1")!;
+  assert.ok(
+    ddSell1.triggerPrice! < drawdownPlan.latestSnapshot.dilutedCost!,
+    "in deep drawdown with excess swing lots, sell1 uses paired buy basis (0.540) to allow +2.5%~+3.5% swing T instead of deadlocking above overall dilutedCost (0.5734)",
+  );
+  assert.ok(ddSell1.estimatedNetProfit! > 10, "paired swing T still yields positive net profit into profitPool");
+});
+
 
 
 

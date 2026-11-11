@@ -121,11 +121,17 @@ export interface ActionPointItem {
 
 export interface TechnicalDataContext {
   currentPrice: number;
+  ma10?: number;
   ma20: number;
   ma20DiffPct: number;
   high20d: number;
   low20d: number;
+  high60d?: number;
   low60d: number;
+  prevHigh20d?: number;
+  prevLow20d?: number;
+  upperBand20d?: number;
+  lowerBand20d?: number;
   dailyVolatilityPct: number;
   /** 最新成交量较20日均量的比值（量比，如 0.72 表示缩量，1.65 表示放量） */
   volumeRatio20d?: number | null;

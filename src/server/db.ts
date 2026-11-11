@@ -544,5 +544,16 @@ export function setDailyFrozenPlan(symbol: string, day: string, plan: PositionPl
   `).run(symbol, day, JSON.stringify(plan), new Date().toISOString());
 }
 
+export function deleteDailyFrozenPlan(symbol?: string, day?: string): void {
+  const db = getDb();
+  if (symbol && day) {
+    db.prepare("DELETE FROM daily_frozen_plans WHERE symbol = ? AND day = ?").run(symbol, day);
+  } else if (symbol) {
+    db.prepare("DELETE FROM daily_frozen_plans WHERE symbol = ?").run(symbol);
+  } else {
+    db.prepare("DELETE FROM daily_frozen_plans").run();
+  }
+}
+
 
 

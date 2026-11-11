@@ -212,8 +212,20 @@ export async function getOrFreezeDailyPlan(
   const day = targetDay ?? beijingDate(new Date());
   const existing = getDailyFrozenPlan(symbol, day);
   if (existing) {
-    existing.frozenDate = day;
-    return existing;
+    // Verify that the latest position snapshot hasn't changed since this plan was frozen
+    const latestRows = getPositionSnapshots(symbol);
+    const latestRow = latestRows.at(-1);
+    const snapshotStillMatches =
+      !latestRow ||
+      (existing.latestSnapshot?.id === latestRow.id &&
+        existing.latestSnapshot?.shares === latestRow.shares &&
+        Math.abs(
+          (existing.latestSnapshot?.marketValue ?? 0) - latestRow.market_value,
+        ) < 0.01);
+    if (snapshotStillMatches) {
+      existing.frozenDate = day;
+      return existing;
+    }
   }
 
   // Calculate fresh plan from yesterday/latest closes to freeze

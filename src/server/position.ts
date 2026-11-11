@@ -1,4 +1,5 @@
 import {
+  deleteDailyFrozenPlan,
   deletePositionSnapshot,
   getPositionSnapshots,
   getStoredStrategyConfig,
@@ -152,7 +153,7 @@ export function recordPositionSnapshot(input: {
     });
   }
   const day = input.day && /^\d{4}-\d{2}-\d{2}$/.test(input.day) ? input.day : beijingDate(new Date());
-  return insertPositionSnapshot({
+  const inserted = insertPositionSnapshot({
     symbol: input.symbol,
     day,
     shares: input.symbol === "etf_513180" ? null : (input.shares ?? null),
@@ -160,10 +161,17 @@ export function recordPositionSnapshot(input: {
     unrealizedPnl: round2(input.unrealizedPnl),
     note: input.note?.trim() || null,
   });
+  // Invalidate cached daily frozen plan so intraday verification reflects new position immediately
+  deleteDailyFrozenPlan(input.symbol);
+  return inserted;
 }
 
 export function removePositionSnapshot(id: number): boolean {
-  return deletePositionSnapshot(id);
+  const deleted = deletePositionSnapshot(id);
+  if (deleted) {
+    deleteDailyFrozenPlan();
+  }
+  return deleted;
 }
 
 export function updateStrategyConfig(
@@ -173,6 +181,7 @@ export function updateStrategyConfig(
   const current = getStoredStrategyConfig(symbol) ?? {};
   const next: StoredStrategyConfig = { ...current, ...patch };
   setStoredStrategyConfig(symbol, next);
+  deleteDailyFrozenPlan(symbol);
   return next;
 }
 
@@ -259,10 +268,12 @@ function replayGridSnapshots(
   snapshots: PositionSnapshotItem[];
   profitPool: number;
   bonusCoreShares: number;
+  lastBuyPrice: number | null;
 } {
   const decimals = symbol === "cea_600115" ? 2 : 3;
   let profitPool = 0;
   let bonusCoreShares = 0;
+  let lastBuyPrice: number | null = null;
   const snapshots: PositionSnapshotItem[] = [];
 
   for (let i = 0; i < rawRows.length; i++) {
@@ -292,6 +303,8 @@ function replayGridSnapshots(
     const prevShares = prev.shares ?? 0;
     const deltaShares = shares - prevShares;
     const deltaCost = round2(totalCost - prev.totalCost);
+    const spotPrice =
+      shares > 0 ? r.market_value / shares : prev.marketValue / Math.max(1, prevShares);
 
     const { rows: prevLadder, currentRowIndex: prevIdx } = buildLadderRows(
       symbol,
@@ -306,14 +319,38 @@ function replayGridSnapshots(
 
     if (deltaShares < 0) {
       const soldShares = Math.abs(deltaShares);
-      const sellPrice =
-        prevRung?.sellPrice ??
-        (deltaCost < 0 ? Math.abs(deltaCost) / soldShares : prev.marketValue / Math.max(1, prevShares));
-      const pairedBuy = prevRung?.pairedBuyPrice ?? sellPrice * (symbol === "cea_600115" ? 0.95 : 0.98);
-      const grossProfit = Math.max(0, (sellPrice - pairedBuy) * soldShares);
+      // Prefer actual transaction price derived from real cost reduction (deltaCost < 0)
+      const costImpliedSell = deltaCost < 0 ? Math.abs(deltaCost) / soldShares : null;
+      const isValidImpliedSell =
+        costImpliedSell !== null &&
+        costImpliedSell >= spotPrice * 0.75 &&
+        costImpliedSell <= spotPrice * 1.25;
+      const sellPrice = isValidImpliedSell
+        ? roundTo(costImpliedSell, decimals)
+        : (prevRung?.sellPrice ?? roundTo(spotPrice, decimals));
+
+      const defaultPairedBuy =
+        prevRung?.pairedBuyPrice ?? sellPrice * (symbol === "cea_600115" ? 0.95 : 0.98);
+      const pairedBuy =
+        lastBuyPrice !== null && lastBuyPrice < sellPrice
+          ? lastBuyPrice
+          : defaultPairedBuy;
+
       // 600115 has 5 RMB min commission each way + 0.05% stamp tax on sell (~11 RMB total)
-      const fee = symbol === "cea_600115" ? round2(10 + soldShares * sellPrice * 0.0005) : round2(soldShares * sellPrice * 0.0001);
-      const netProfit = Math.max(0, round2(grossProfit - fee));
+      const fee =
+        symbol === "cea_600115"
+          ? round2(10 + soldShares * sellPrice * 0.0005)
+          : round2(soldShares * sellPrice * 0.0001);
+
+      // Calculate net profit from actual cost reduction vs diluted/paired basis, fallback to spread
+      const basisForCostDelta = Math.min(prev.dilutedCost ?? pairedBuy, pairedBuy);
+      const realizedFromCostDelta =
+        deltaCost < 0 ? round2(Math.abs(deltaCost) - soldShares * basisForCostDelta) : 0;
+      const spreadProfit = round2(Math.max(0, (sellPrice - pairedBuy) * soldShares) - fee);
+      const netProfit = Math.max(
+        0,
+        isValidImpliedSell && realizedFromCostDelta > 0 ? realizedFromCostDelta : spreadProfit,
+      );
       profitPool = round2(profitPool + netProfit);
 
       let retainNote = "";
@@ -325,9 +362,17 @@ function replayGridSnapshots(
       inferredTrade = `卖出 ${soldShares.toLocaleString()}股 @ ~¥${sellPrice.toFixed(decimals)} · 净利入池 +¥${netProfit.toFixed(2)}${retainNote}`;
     } else if (deltaShares > 0) {
       const boughtShares = deltaShares;
-      const buyPrice =
-        prevRung?.buyPrice ??
-        (deltaCost > 0 ? deltaCost / boughtShares : r.market_value / Math.max(1, shares));
+      // Prefer actual transaction price derived from real cost addition (deltaCost > 0)
+      const costImpliedBuy = deltaCost > 0 ? deltaCost / boughtShares : null;
+      const isValidImpliedBuy =
+        costImpliedBuy !== null &&
+        costImpliedBuy >= spotPrice * 0.75 &&
+        costImpliedBuy <= spotPrice * 1.25;
+      const buyPrice = isValidImpliedBuy
+        ? roundTo(costImpliedBuy, decimals)
+        : (prevRung?.buyPrice ?? roundTo(spotPrice, decimals));
+      lastBuyPrice = buyPrice;
+
       const expectedBuyShares = prevRung?.buyShares ?? boughtShares;
 
       let bonusNote = "";
@@ -370,7 +415,7 @@ function replayGridSnapshots(
     });
   }
 
-  return { snapshots, profitPool, bonusCoreShares };
+  return { snapshots, profitPool, bonusCoreShares, lastBuyPrice };
 }
 
 function buildCostCurve(
@@ -466,8 +511,15 @@ export function extractTechnicalStats(
   defaultVol = 0.014,
 ): Omit<TechnicalDataContext, "fundamentalDriveSummary"> {
   const valid = series.filter((p) => Number.isFinite(p.close) && p.close > 0);
+  const recent10 = valid.slice(-10);
   const recent20 = valid.slice(-20);
   const recent60 = valid.slice(-60);
+
+  const ma10Raw =
+    recent10.length > 0
+      ? recent10.reduce((sum, p) => sum + p.close, 0) / recent10.length
+      : currentPrice;
+  const ma10 = roundTo(ma10Raw, decimals);
 
   const ma20Raw =
     recent20.length > 0
@@ -492,8 +544,22 @@ export function extractTechnicalStats(
     recent20.length > 0 ? Math.min(currentPrice, ...recent20.map(getLow)) : currentPrice * 0.97,
     decimals,
   );
+  const high60d = roundTo(
+    recent60.length > 0 ? Math.max(high20d, ...recent60.map(getHigh)) : high20d * 1.03,
+    decimals,
+  );
   const low60d = roundTo(
     recent60.length > 0 ? Math.min(low20d, ...recent60.map(getLow)) : low20d * 0.97,
+    decimals,
+  );
+
+  const prior20 = recent20.length > 1 ? recent20.slice(0, -1) : [];
+  const prevHigh20d = roundTo(
+    prior20.length > 0 ? Math.max(...prior20.map(getHigh)) : high20d,
+    decimals,
+  );
+  const prevLow20d = roundTo(
+    prior20.length > 0 ? Math.min(...prior20.map(getLow)) : low20d,
     decimals,
   );
 
@@ -509,6 +575,9 @@ export function extractTechnicalStats(
   }
   const rawVol = volCount >= 3 ? volSum / volCount : defaultVol;
   const dailyVolatilityPct = Number(Math.min(0.035, Math.max(0.008, rawVol)).toFixed(4));
+  const bandWidthPct = Math.max(0.025, dailyVolatilityPct * 2.1);
+  const upperBand20d = roundTo(ma20 * (1 + bandWidthPct), decimals);
+  const lowerBand20d = roundTo(ma20 * (1 - bandWidthPct), decimals);
 
   const volPoints = recent20.filter((p) => p.volume !== undefined && Number.isFinite(p.volume) && p.volume > 0);
   const latestPt = recent20.at(-1);
@@ -535,16 +604,116 @@ export function extractTechnicalStats(
 
   return {
     currentPrice,
+    ma10,
     ma20,
     ma20DiffPct,
     high20d,
     low20d,
+    high60d,
     low60d,
+    prevHigh20d,
+    prevLow20d,
+    upperBand20d,
+    lowerBand20d,
     dailyVolatilityPct,
     volumeRatio20d,
     volumeSignal,
     intradaySource: hasHighLow ? "high-low" : "close",
   };
+}
+
+interface RawPointSpec {
+  label: string;
+  price: number | null;
+  shares: number | null;
+  retainShares: number;
+  netProfit: number | null;
+  projectedCost: number | null;
+  technicalAnchor: string;
+  fundamentalReason: string;
+  disabledReason: string | null;
+}
+
+function buildGridActionPoints(
+  currentPrice: number,
+  currentShares: number,
+  totalCost: number,
+  costDecimals: number,
+  buyFixedFee: number,
+  points: {
+    sell1: RawPointSpec;
+    sell2: RawPointSpec;
+    buy1: Omit<RawPointSpec, "netProfit" | "projectedCost">;
+    buy2: Omit<RawPointSpec, "netProfit" | "projectedCost">;
+  },
+): ActionPointItem[] {
+  const calcBuyProjectedCost = (price: number | null, shares: number | null) =>
+    price && shares
+      ? Number(
+          ((totalCost + price * shares + buyFixedFee) / (currentShares + shares)).toFixed(
+            costDecimals,
+          ),
+        )
+      : null;
+
+  const toItem = (
+    kind: ActionPointItem["kind"],
+    spec: RawPointSpec,
+  ): ActionPointItem => ({
+    kind,
+    label: spec.label,
+    triggerPrice: spec.price,
+    distancePct: spec.price ? Number((spec.price / currentPrice - 1).toFixed(4)) : null,
+    shares: spec.shares,
+    retainShares: spec.retainShares,
+    cashAmount: spec.price && spec.shares ? round2(spec.price * spec.shares) : null,
+    estimatedNetProfit: spec.netProfit,
+    projectedDilutedCost: spec.projectedCost,
+    technicalAnchor: spec.technicalAnchor,
+    fundamentalReason: spec.fundamentalReason,
+    disabledReason: spec.disabledReason,
+  });
+
+  return [
+    toItem("sell1", points.sell1),
+    toItem("sell2", points.sell2),
+    toItem("buy1", {
+      ...points.buy1,
+      netProfit: null,
+      projectedCost: calcBuyProjectedCost(points.buy1.price, points.buy1.shares),
+    }),
+    toItem("buy2", {
+      ...points.buy2,
+      netProfit: null,
+      projectedCost: calcBuyProjectedCost(points.buy2.price, points.buy2.shares),
+    }),
+  ];
+}
+
+function syncCurrentLadderRow(
+  currentRow: GridLadderRow | undefined,
+  decimals: number,
+  sell1Price: number | null,
+  sell1Shares: number | null,
+  sell1Disabled: string | null,
+  buy1Price: number | null,
+  buy1Shares: number | null,
+  buy1Disabled: string | null,
+): void {
+  if (!currentRow) return;
+  currentRow.sellPrice = sell1Price;
+  currentRow.sellShares = sell1Shares;
+  currentRow.sellLabel =
+    sell1Price && sell1Shares
+      ? `¥${sell1Price.toFixed(decimals)} 卖 ${sell1Shares.toLocaleString()}股`
+      : (sell1Disabled ?? "锁仓持有");
+  currentRow.buyPrice = buy1Price;
+  currentRow.buyShares = buy1Shares;
+  currentRow.buyCash = buy1Price && buy1Shares ? round2(buy1Price * buy1Shares) : null;
+  currentRow.buyLabel =
+    buy1Price && buy1Shares
+      ? `¥${buy1Price.toFixed(decimals)} 买 ${buy1Shares.toLocaleString()}股`
+      : (buy1Disabled ?? "暂停买入");
 }
 
 export function compute516670PositionPlan(
@@ -558,7 +727,7 @@ export function compute516670PositionPlan(
   const baseCoreShares = config.baseCoreShares ?? DEFAULT_STRATEGY_CONFIGS.etf_516670.baseCoreShares;
 
   const rawRows = getEffectiveSnapshots("etf_516670");
-  const { snapshots, profitPool, bonusCoreShares } = replayGridSnapshots(
+  const { snapshots, profitPool, bonusCoreShares, lastBuyPrice } = replayGridSnapshots(
     "etf_516670",
     rawRows,
     anchorPrice,
@@ -664,6 +833,12 @@ export function compute516670PositionPlan(
   const isBullishCycle = totalScore >= 68 || cycleScore >= 56;
   const isWeakCycle = totalScore < 45;
 
+  // Effective support when currentPrice is already at/breaking 20d low
+  const isAt20dLow = currentPrice <= tech.low20d * 1.002;
+  const effectiveSupport20d = isAt20dLow
+    ? Math.min(tech.low60d, tech.lowerBand20d ?? currentPrice * 0.98)
+    : tech.low20d;
+
   // 1) Buy 1 (第一买点 · 常规回踩低吸)
   let buy1Price: number | null = null;
   let buy1Shares: number | null = null;
@@ -677,27 +852,34 @@ export function compute516670PositionPlan(
     buy1FundReason = `${porkMetricsText}，行业处于高景气顶部区间，只卖不买`;
   } else {
     if (isBullishCycle) {
-      // Bullish cycle: anchor near MA20 pullback (if price > MA20) or -1.8%~-2.0% support
-      const maPullback = currentPrice > tech.ma20 * 1.006 ? tech.ma20 : currentPrice * 0.982;
+      // Cap single-step pullback when price rallies > +3.8% above MA20 by stepping up to MA10 / -3.2%
+      const isExtendedAboveMa20 = currentPrice > tech.ma20 * 1.038;
+      const maPullback = isExtendedAboveMa20
+        ? Math.max(tech.ma20, tech.ma10 ?? currentPrice * 0.972, currentPrice * 0.968)
+        : currentPrice > tech.ma20 * 1.006
+          ? tech.ma20
+          : currentPrice * 0.982;
       const dumpDiscount = isHighVolDump ? 0.993 : 1.0;
-      const rawBuy1 = Math.min(currentPrice * 0.985, Math.max(tech.low20d, maPullback)) * dumpDiscount;
+      const rawBuy1 = Math.min(currentPrice * 0.985, Math.max(effectiveSupport20d, maPullback)) * dumpDiscount;
       const p1 = roundTo(rawBuy1, 3);
       buy1Price = p1;
       buy1Shares = 1000;
       buy1TechAnchor =
         Math.abs(p1 - tech.ma20) <= 0.004
           ? `回踩 MA20 均线支撑 (¥${tech.ma20.toFixed(3)} · ${tech.volumeSignal})`
-          : `近期回踩支撑位 (MA20 ¥${tech.ma20.toFixed(3)} / 20日盘中低点 ¥${tech.low20d.toFixed(3)} · ${tech.volumeSignal})`;
+          : isExtendedAboveMa20 && p1 > tech.ma20 + 0.004
+            ? `强势脱离均线，上移锚定 MA10 浅回踩支撑 (¥${(tech.ma10 ?? p1).toFixed(3)} · ${tech.volumeSignal})`
+            : `近期回踩支撑位 (MA20 ¥${tech.ma20.toFixed(3)} / 20日盘中低点 ¥${tech.low20d.toFixed(3)} · ${tech.volumeSignal})`;
       buy1FundReason = `${porkMetricsText}（评分 ${totalScore}），底部基本面扎实${isHighVolDump ? "（当日放量回调下移0.7%防急杀）" : "，回踩均线支撑即可低吸接回"}`;
     } else if (!isWeakCycle) {
-      const rawBuy1 = Math.min(currentPrice * 0.976, (tech.ma20 + tech.low20d) / 2);
+      const rawBuy1 = Math.min(currentPrice * 0.976, (tech.ma20 + effectiveSupport20d) / 2);
       const p1 = roundTo(rawBuy1, 3);
       buy1Price = p1;
       buy1Shares = 1000;
       buy1TechAnchor = `MA20 (¥${tech.ma20.toFixed(3)}) 与近20日低点 (¥${tech.low20d.toFixed(3)}) 中枢支撑`;
       buy1FundReason = `基本面中性震荡（评分 ${totalScore}），等回调约 ${((p1 / currentPrice - 1) * 100).toFixed(1)}% 至支撑区再接`;
     } else {
-      const rawBuy1 = Math.min(currentPrice * 0.962, tech.low20d * 0.995);
+      const rawBuy1 = Math.min(currentPrice * 0.962, effectiveSupport20d * 0.995);
       const p1 = roundTo(rawBuy1, 3);
       buy1Price = p1;
       buy1Shares = 800;
@@ -731,6 +913,7 @@ export function compute516670PositionPlan(
   // 3) Sell 1 (第一卖点 · 近期压力位做T降本)
   const minFloorShares = cycleState === "peak" ? 0 : cycleState === "prosperity" ? 5000 : totalCoreShares;
   const sellableShares = Math.max(0, currentShares - minFloorShares);
+  const currentRow = ladderRows[currentRowIndex];
   let sell1Price: number | null = null;
   let sell1Shares: number | null = null;
   let sell1NetProfit: number | null = null;
@@ -744,26 +927,52 @@ export function compute516670PositionPlan(
     sell1TechAnchor = `近20日高点压力 ¥${tech.high20d.toFixed(3)}`;
     sell1FundReason = "仅剩核心底仓，暂不做T卖出";
   } else {
-    // Must be above dilutedCost + margin AND above currentPrice
-    const minProfitTarget = Math.max(latestCost * 1.025, currentPrice * 1.012);
-    const rawSell1 = isBullishCycle
-      ? Math.max(minProfitTarget, tech.high20d * 0.998, tech.ma20 * 1.028)
-      : Math.max(minProfitTarget, currentPrice * 1.014, tech.ma20 * 1.018);
+    // Prevent deadlock in deep drawdown: use paired swing basis for excess swing lots instead of locking at global latestCost
+    const isDeepDrawdownSwing = currentPrice < latestCost * 0.985 && sellableShares > 1000;
+    const pairedSwingBasis = isDeepDrawdownSwing
+      ? Math.min(latestCost, lastBuyPrice ?? currentRow?.pairedBuyPrice ?? currentPrice)
+      : latestCost;
+
+    // Upgrade resistance anchor if price is already breaking out at/above 20d high
+    const isBreakout20d = currentPrice >= tech.high20d * 0.998;
+    const effectiveHighAnchor = isBreakout20d
+      ? Math.max(tech.high60d ?? tech.high20d * 1.02, tech.upperBand20d ?? currentPrice * 1.02)
+      : tech.high20d;
+
+    const minProfitTarget = isDeepDrawdownSwing
+      ? Math.max(pairedSwingBasis * 1.025, currentPrice * 1.018)
+      : Math.max(latestCost * 1.025, currentPrice * 1.012);
+
+    const rawSell1 = isDeepDrawdownSwing
+      ? Math.max(
+          minProfitTarget,
+          Math.min(tech.ma20, (tech.ma10 ?? currentPrice * 1.025) * 1.005, currentPrice * 1.04),
+        )
+      : isBullishCycle
+        ? Math.max(minProfitTarget, effectiveHighAnchor * 0.998, tech.ma20 * 1.028)
+        : Math.max(minProfitTarget, currentPrice * 1.014, tech.ma20 * 1.018);
+
     const s1 = roundTo(rawSell1, 3);
     const s1Shares = Math.min(sellableShares, cycleState === "peak" ? 2500 : 1000);
     sell1Price = s1;
     sell1Shares = s1Shares;
     const fee1 = round2(s1Shares * s1 * 0.0001);
-    sell1NetProfit = Math.max(0, round2((s1 - latestCost) * s1Shares - fee1));
+    sell1NetProfit = Math.max(0, round2((s1 - pairedSwingBasis) * s1Shares - fee1));
     const remShares1 = currentShares - s1Shares;
     sell1ProjectedCost =
       remShares1 > 0
         ? Number(((totalCost - s1Shares * s1 + fee1) / remShares1).toFixed(4))
         : 0;
-    sell1TechAnchor = `近20日高点压力位 ¥${tech.high20d.toFixed(3)}（较 MA20 +${((s1 / tech.ma20 - 1) * 100).toFixed(1)}%）`;
-    sell1FundReason = isBullishCycle
-      ? `底部高赔率惜售，等触及前高压力 ¥${s1.toFixed(3)} 再卖 ${s1Shares.toLocaleString()} 股做T，净赚约 ¥${sell1NetProfit.toFixed(1)} 入利润池`
-      : `触及波段压力位兑现 ${s1Shares.toLocaleString()} 股，将剩余持仓摊薄成本压低至 ¥${sell1ProjectedCost.toFixed(4)}`;
+    sell1TechAnchor = isBreakout20d
+      ? `突破20日前高，上移锚定60日压力/波动上轨 ¥${effectiveHighAnchor.toFixed(3)}（较 MA20 +${((s1 / tech.ma20 - 1) * 100).toFixed(1)}%）`
+      : isDeepDrawdownSwing
+        ? `浮亏区波段反弹压力位 (MA10 ¥${(tech.ma10 ?? tech.ma20).toFixed(3)} / MA20 ¥${tech.ma20.toFixed(3)})`
+        : `近20日高点压力位 ¥${tech.high20d.toFixed(3)}（较 MA20 +${((s1 / tech.ma20 - 1) * 100).toFixed(1)}%）`;
+    sell1FundReason = isDeepDrawdownSwing
+      ? `浮亏区波段配对做T（配对基准 ¥${pairedSwingBasis.toFixed(3)}），反弹至 ¥${s1.toFixed(3)} 卖 ${s1Shares.toLocaleString()} 股净赚约 ¥${sell1NetProfit.toFixed(1)} 入池降本`
+      : isBullishCycle
+        ? `底部高赔率惜售，等触及前高压力 ¥${s1.toFixed(3)} 再卖 ${s1Shares.toLocaleString()} 股做T，净赚约 ¥${sell1NetProfit.toFixed(1)} 入利润池`
+        : `触及波段压力位兑现 ${s1Shares.toLocaleString()} 股，将剩余持仓摊薄成本压低至 ¥${sell1ProjectedCost.toFixed(4)}`;
   }
 
   // 4) Sell 2 (第二卖点 · 脉冲冲高止盈)
@@ -788,7 +997,8 @@ export function compute516670PositionPlan(
     sell2Price = s2;
     sell2Shares = s2Shares;
     const fee2 = round2(s2Shares * s2 * 0.0001);
-    sell2NetProfit = Math.max(0, round2((s2 - latestCost) * s2Shares - fee2));
+    const basis2 = Math.min(latestCost, lastBuyPrice ?? latestCost);
+    sell2NetProfit = Math.max(0, round2((s2 - basis2) * s2Shares - fee2));
     const remShares2 = currentShares - (sell1Shares ?? 0) - s2Shares;
     const costAfterS1 = totalCost - (sell1Shares ?? 0) * (sell1Price ?? 0);
     sell2ProjectedCost =
@@ -799,88 +1009,59 @@ export function compute516670PositionPlan(
     sell2FundReason = `情绪脉冲急涨超买时再减 ${s2Shares.toLocaleString()} 股浮仓，落袋净利约 ¥${sell2NetProfit.toFixed(1)}，等回踩均线接回`;
   }
 
-  const actionPoints: ActionPointItem[] = [
-    {
-      kind: "sell1",
+  const actionPoints = buildGridActionPoints(currentPrice, currentShares, totalCost, 4, 0, {
+    sell1: {
       label: "第一卖点 · 近期压力做T",
-      triggerPrice: sell1Price,
-      distancePct: sell1Price ? Number((sell1Price / currentPrice - 1).toFixed(4)) : null,
+      price: sell1Price,
       shares: sell1Shares,
       retainShares: 0,
-      cashAmount: sell1Price && sell1Shares ? round2(sell1Price * sell1Shares) : null,
-      estimatedNetProfit: sell1NetProfit,
-      projectedDilutedCost: sell1ProjectedCost,
+      netProfit: sell1NetProfit,
+      projectedCost: sell1ProjectedCost,
       technicalAnchor: sell1TechAnchor,
       fundamentalReason: sell1FundReason,
       disabledReason: sell1Disabled,
     },
-    {
-      kind: "sell2",
+    sell2: {
       label: "第二卖点 · 脉冲冲高止盈",
-      triggerPrice: sell2Price,
-      distancePct: sell2Price ? Number((sell2Price / currentPrice - 1).toFixed(4)) : null,
+      price: sell2Price,
       shares: sell2Shares,
       retainShares: 0,
-      cashAmount: sell2Price && sell2Shares ? round2(sell2Price * sell2Shares) : null,
-      estimatedNetProfit: sell2NetProfit,
-      projectedDilutedCost: sell2ProjectedCost,
+      netProfit: sell2NetProfit,
+      projectedCost: sell2ProjectedCost,
       technicalAnchor: sell2TechAnchor,
       fundamentalReason: sell2FundReason,
       disabledReason: sell2Disabled,
     },
-    {
-      kind: "buy1",
+    buy1: {
       label: "第一买点 · 回踩支撑低吸",
-      triggerPrice: buy1Price,
-      distancePct: buy1Price ? Number((buy1Price / currentPrice - 1).toFixed(4)) : null,
+      price: buy1Price,
       shares: buy1Shares,
       retainShares: 0,
-      cashAmount: buy1Price && buy1Shares ? round2(buy1Price * buy1Shares) : null,
-      estimatedNetProfit: null,
-      projectedDilutedCost:
-        buy1Price && buy1Shares
-          ? Number(((totalCost + buy1Price * buy1Shares) / (currentShares + buy1Shares)).toFixed(4))
-          : null,
       technicalAnchor: buy1TechAnchor,
       fundamentalReason: buy1FundReason,
       disabledReason: buy1Disabled,
     },
-    {
-      kind: "buy2",
+    buy2: {
       label: "第二买点 · 强支撑大跌加码",
-      triggerPrice: buy2Price,
-      distancePct: buy2Price ? Number((buy2Price / currentPrice - 1).toFixed(4)) : null,
+      price: buy2Price,
       shares: buy2Shares,
       retainShares: buy2Retain,
-      cashAmount: buy2Price && buy2Shares ? round2(buy2Price * buy2Shares) : null,
-      estimatedNetProfit: null,
-      projectedDilutedCost:
-        buy2Price && buy2Shares
-          ? Number(((totalCost + buy2Price * buy2Shares) / (currentShares + buy2Shares)).toFixed(4))
-          : null,
       technicalAnchor: buy2TechAnchor,
       fundamentalReason: buy2FundReason,
       disabledReason: buy2Disabled,
     },
-  ];
+  });
 
-  // Synchronize currentRow with the dynamic buy1 / sell1 so legacy callers stay consistent
-  const currentRow = ladderRows[currentRowIndex]!;
-  if (currentRow) {
-    currentRow.sellPrice = sell1Price;
-    currentRow.sellShares = sell1Shares;
-    currentRow.sellLabel =
-      sell1Price && sell1Shares
-        ? `¥${sell1Price.toFixed(3)} 卖 ${sell1Shares.toLocaleString()}股`
-        : sell1Disabled ?? "锁仓持有";
-    currentRow.buyPrice = buy1Price;
-    currentRow.buyShares = buy1Shares;
-    currentRow.buyCash = buy1Price && buy1Shares ? round2(buy1Price * buy1Shares) : null;
-    currentRow.buyLabel =
-      buy1Price && buy1Shares
-        ? `¥${buy1Price.toFixed(3)} 买 ${buy1Shares.toLocaleString()}股`
-        : buy1Disabled ?? "暂停买入";
-  }
+  syncCurrentLadderRow(
+    currentRow,
+    3,
+    sell1Price,
+    sell1Shares,
+    sell1Disabled,
+    buy1Price,
+    buy1Shares,
+    buy1Disabled,
+  );
 
   const nextBuyPrice = buy1Price ?? currentPrice;
   const lotCost100 = Number((nextBuyPrice * 100).toFixed(2));
@@ -943,7 +1124,7 @@ export function compute600115PositionPlan(
   const baseCoreShares = config.baseCoreShares ?? DEFAULT_STRATEGY_CONFIGS.cea_600115.baseCoreShares;
 
   const rawRows = getEffectiveSnapshots("cea_600115");
-  const { snapshots, profitPool, bonusCoreShares } = replayGridSnapshots(
+  const { snapshots, profitPool, bonusCoreShares, lastBuyPrice } = replayGridSnapshots(
     "cea_600115",
     rawRows,
     anchorPrice,
@@ -1035,6 +1216,11 @@ export function compute600115PositionPlan(
     fundamentalDriveSummary,
   };
 
+  const isAt20dLow = currentPrice <= tech.low20d * 1.002;
+  const effectiveSupport20d = isAt20dLow
+    ? Math.min(tech.low60d, tech.lowerBand20d ?? currentPrice * 0.96)
+    : tech.low20d;
+
   // Compute dynamic 2-Buy + 2-Sell points for 600115 (with no-fee-waiver ~11 RMB guardrail)
   // 1) Buy 1
   let buy1Price: number | null = null;
@@ -1049,22 +1235,27 @@ export function compute600115PositionPlan(
     buy1FundReason = "遵守东航不重仓原则，等待反弹高抛后再接";
   } else {
     if (isOilFxTailwind) {
-      const maSupport = currentPrice > tech.ma20 * 1.02 ? tech.ma20 : currentPrice * 0.955;
-      const rawBuy1 = Math.min(currentPrice * 0.96, Math.max(tech.low20d, maSupport));
+      const isExtendedAboveMa20 = currentPrice > tech.ma20 * 1.05;
+      const maSupport = isExtendedAboveMa20
+        ? Math.max(tech.ma20, tech.ma10 ?? currentPrice * 0.96, currentPrice * 0.955)
+        : currentPrice > tech.ma20 * 1.02
+          ? tech.ma20
+          : currentPrice * 0.955;
+      const rawBuy1 = Math.min(currentPrice * 0.96, Math.max(effectiveSupport20d, maSupport));
       const p1 = roundTo(rawBuy1, 2);
       buy1Price = p1;
       buy1Shares = 400;
       buy1TechAnchor = `回踩 MA20 均线 (¥${tech.ma20.toFixed(2)}) 与近期支撑区`;
       buy1FundReason = `${avMetricsText}，油汇顺风支撑估值，回踩约 ${((p1 / currentPrice - 1) * 100).toFixed(1)}% 买 400 股（拉开无免五安全价差）`;
     } else if (!isOilFxHeadwind) {
-      const rawBuy1 = Math.min(currentPrice * 0.952, (tech.ma20 + tech.low20d) / 2);
+      const rawBuy1 = Math.min(currentPrice * 0.952, (tech.ma20 + effectiveSupport20d) / 2);
       const p1 = roundTo(rawBuy1, 2);
       buy1Price = p1;
       buy1Shares = 400;
       buy1TechAnchor = `MA20 (¥${tech.ma20.toFixed(2)}) 下方与近20日低点 (¥${tech.low20d.toFixed(2)}) 支撑位`;
       buy1FundReason = `无免五要求拉开约 5% 间距覆盖 11 元佣金印花税，回调至 ¥${p1.toFixed(2)} 买入 400 股`;
     } else {
-      const rawBuy1 = Math.min(currentPrice * 0.938, tech.low20d * 0.99);
+      const rawBuy1 = Math.min(currentPrice * 0.938, effectiveSupport20d * 0.99);
       const p1 = roundTo(rawBuy1, 2);
       buy1Price = p1;
       buy1Shares = 400;
@@ -1095,9 +1286,10 @@ export function compute600115PositionPlan(
     buy2FundReason = `极端深跌破位时买入 ${buy2Shares} 股摊薄成本；后续反弹卖 ${buy2Shares - buy2Retain} 股赚差价、留 ${buy2Retain} 股转底仓`;
   }
 
-  // 3) Sell 1 (Must cover 11 RMB fee + reasonable net profit above dilutedCost)
+  // 3) Sell 1 (Must cover 11 RMB fee + reasonable net profit above dilutedCost or pairedSwingBasis)
   const minFloorShares = isOilFxHeadwind ? 1400 : totalCoreShares;
   const sellableShares = Math.max(0, currentShares - minFloorShares);
+  const currentRow = ladderRows[currentRowIndex];
   let sell1Price: number | null = null;
   let sell1Shares: number | null = null;
   let sell1NetProfit: number | null = null;
@@ -1111,24 +1303,42 @@ export function compute600115PositionPlan(
     sell1TechAnchor = `近20日高点压力 ¥${tech.high20d.toFixed(2)}`;
     sell1FundReason = "保留底仓等待航司周期弹性";
   } else {
-    // 400 shares needs >= 0.16 RMB above dilutedCost to clear 11 RMB fee + ~53 RMB net profit
-    const minFeeSafePrice = Math.max(latestCost + 0.18, currentPrice * 1.022);
-    const rawSell1 = isOilFxTailwind
-      ? Math.max(minFeeSafePrice, tech.high20d * 1.005, tech.ma20 * 1.045)
-      : Math.max(minFeeSafePrice, tech.high20d * 0.995, currentPrice * 1.025);
+    const isDeepDrawdownSwing = currentPrice < latestCost * 0.98 && sellableShares > 400;
+    const pairedSwingBasis = isDeepDrawdownSwing
+      ? Math.min(latestCost, lastBuyPrice ?? currentRow?.pairedBuyPrice ?? currentPrice)
+      : latestCost;
+
+    const isBreakout20d = currentPrice >= tech.high20d * 0.998;
+    const effectiveHighAnchor = isBreakout20d
+      ? Math.max(tech.high60d ?? tech.high20d * 1.03, tech.upperBand20d ?? currentPrice * 1.03)
+      : tech.high20d;
+
+    // 400 shares needs >= 0.16 RMB above basis to clear 11 RMB fee + ~53 RMB net profit
+    const minFeeSafePrice = Math.max(pairedSwingBasis + 0.18, currentPrice * 1.022);
+    const rawSell1 = isDeepDrawdownSwing
+      ? Math.max(minFeeSafePrice, Math.min(tech.ma20, currentPrice * 1.045))
+      : isOilFxTailwind
+        ? Math.max(minFeeSafePrice, effectiveHighAnchor * 1.005, tech.ma20 * 1.045)
+        : Math.max(minFeeSafePrice, effectiveHighAnchor * 0.995, currentPrice * 1.025);
     const s1 = roundTo(rawSell1, 2);
     const s1Shares = Math.min(400, sellableShares);
     sell1Price = s1;
     sell1Shares = s1Shares;
     const fee1 = round2(10 + s1Shares * s1 * 0.0005);
-    sell1NetProfit = Math.max(0, round2((s1 - latestCost) * s1Shares - fee1));
+    sell1NetProfit = Math.max(0, round2((s1 - pairedSwingBasis) * s1Shares - fee1));
     const remShares1 = currentShares - s1Shares;
     sell1ProjectedCost =
       remShares1 > 0
         ? Number(((totalCost - s1Shares * s1 + fee1) / remShares1).toFixed(3))
         : 0;
-    sell1TechAnchor = `近20日高点压力位 ¥${tech.high20d.toFixed(2)}（较 MA20 +${((s1 / tech.ma20 - 1) * 100).toFixed(1)}%）`;
-    sell1FundReason = `卖出 ${s1Shares} 股扣除约 ¥${fee1.toFixed(1)} 佣金印花税后净赚约 ¥${sell1NetProfit.toFixed(0)} 入池，剩余 ${remShares1.toLocaleString()} 股成本降至 ¥${sell1ProjectedCost.toFixed(3)}`;
+    sell1TechAnchor = isBreakout20d
+      ? `突破20日前高，上移锚定60日压力/波动上轨 ¥${effectiveHighAnchor.toFixed(2)}（较 MA20 +${((s1 / tech.ma20 - 1) * 100).toFixed(1)}%）`
+      : isDeepDrawdownSwing
+        ? `浮亏区波段反弹压力位 (MA10 ¥${(tech.ma10 ?? tech.ma20).toFixed(2)} / MA20 ¥${tech.ma20.toFixed(2)})`
+        : `近20日高点压力位 ¥${tech.high20d.toFixed(2)}（较 MA20 +${((s1 / tech.ma20 - 1) * 100).toFixed(1)}%）`;
+    sell1FundReason = isDeepDrawdownSwing
+      ? `浮亏区波段配对做T（配对基准 ¥${pairedSwingBasis.toFixed(2)}），卖出 ${s1Shares} 股扣除无免五佣金印花税后净赚约 ¥${sell1NetProfit.toFixed(0)} 入池降本`
+      : `卖出 ${s1Shares} 股扣除约 ¥${fee1.toFixed(1)} 佣金印花税后净赚约 ¥${sell1NetProfit.toFixed(0)} 入池，剩余 ${remShares1.toLocaleString()} 股成本降至 ¥${sell1ProjectedCost.toFixed(3)}`;
   }
 
   // 4) Sell 2
@@ -1153,7 +1363,8 @@ export function compute600115PositionPlan(
     sell2Price = s2;
     sell2Shares = s2Shares;
     const fee2 = round2(10 + s2Shares * s2 * 0.0005);
-    sell2NetProfit = Math.max(0, round2((s2 - latestCost) * s2Shares - fee2));
+    const basis2 = Math.min(latestCost, lastBuyPrice ?? latestCost);
+    sell2NetProfit = Math.max(0, round2((s2 - basis2) * s2Shares - fee2));
     const remShares2 = currentShares - (sell1Shares ?? 0) - s2Shares;
     const costAfterS1 = totalCost - (sell1Shares ?? 0) * (sell1Price ?? 0);
     sell2ProjectedCost =
@@ -1164,87 +1375,59 @@ export function compute600115PositionPlan(
     sell2FundReason = `脉冲大涨再兑现 ${s2Shares} 股机动仓，扣除无免五费用后净赚约 ¥${sell2NetProfit.toFixed(0)}，摊薄成本降至 ¥${sell2ProjectedCost.toFixed(3)}`;
   }
 
-  const actionPoints: ActionPointItem[] = [
-    {
-      kind: "sell1",
+  const actionPoints = buildGridActionPoints(currentPrice, currentShares, totalCost, 3, 5, {
+    sell1: {
       label: "第一卖点 · 近期压力做T",
-      triggerPrice: sell1Price,
-      distancePct: sell1Price ? Number((sell1Price / currentPrice - 1).toFixed(4)) : null,
+      price: sell1Price,
       shares: sell1Shares,
       retainShares: 0,
-      cashAmount: sell1Price && sell1Shares ? round2(sell1Price * sell1Shares) : null,
-      estimatedNetProfit: sell1NetProfit,
-      projectedDilutedCost: sell1ProjectedCost,
+      netProfit: sell1NetProfit,
+      projectedCost: sell1ProjectedCost,
       technicalAnchor: sell1TechAnchor,
       fundamentalReason: sell1FundReason,
       disabledReason: sell1Disabled,
     },
-    {
-      kind: "sell2",
+    sell2: {
       label: "第二卖点 · 波段阻力止盈",
-      triggerPrice: sell2Price,
-      distancePct: sell2Price ? Number((sell2Price / currentPrice - 1).toFixed(4)) : null,
+      price: sell2Price,
       shares: sell2Shares,
       retainShares: 0,
-      cashAmount: sell2Price && sell2Shares ? round2(sell2Price * sell2Shares) : null,
-      estimatedNetProfit: sell2NetProfit,
-      projectedDilutedCost: sell2ProjectedCost,
+      netProfit: sell2NetProfit,
+      projectedCost: sell2ProjectedCost,
       technicalAnchor: sell2TechAnchor,
       fundamentalReason: sell2FundReason,
       disabledReason: sell2Disabled,
     },
-    {
-      kind: "buy1",
+    buy1: {
       label: "第一买点 · 油汇联动支撑",
-      triggerPrice: buy1Price,
-      distancePct: buy1Price ? Number((buy1Price / currentPrice - 1).toFixed(4)) : null,
+      price: buy1Price,
       shares: buy1Shares,
       retainShares: 0,
-      cashAmount: buy1Price && buy1Shares ? round2(buy1Price * buy1Shares) : null,
-      estimatedNetProfit: null,
-      projectedDilutedCost:
-        buy1Price && buy1Shares
-          ? Number(((totalCost + buy1Price * buy1Shares + 5) / (currentShares + buy1Shares)).toFixed(3))
-          : null,
       technicalAnchor: buy1TechAnchor,
       fundamentalReason: buy1FundReason,
       disabledReason: buy1Disabled,
     },
-    {
-      kind: "buy2",
+    buy2: {
       label: "第二买点 · 前低深跌加码",
-      triggerPrice: buy2Price,
-      distancePct: buy2Price ? Number((buy2Price / currentPrice - 1).toFixed(4)) : null,
+      price: buy2Price,
       shares: buy2Shares,
       retainShares: buy2Retain,
-      cashAmount: buy2Price && buy2Shares ? round2(buy2Price * buy2Shares) : null,
-      estimatedNetProfit: null,
-      projectedDilutedCost:
-        buy2Price && buy2Shares
-          ? Number(((totalCost + buy2Price * buy2Shares + 5) / (currentShares + buy2Shares)).toFixed(3))
-          : null,
       technicalAnchor: buy2TechAnchor,
       fundamentalReason: buy2FundReason,
       disabledReason: buy2Disabled,
     },
-  ];
+  });
 
-  const currentRow = ladderRows[currentRowIndex]!;
-  if (currentRow) {
-    currentRow.sellPrice = sell1Price;
-    currentRow.sellShares = sell1Shares;
-    currentRow.sellLabel =
-      sell1Price && sell1Shares
-        ? `¥${sell1Price.toFixed(2)} 卖 ${sell1Shares.toLocaleString()}股`
-        : sell1Disabled ?? "锁仓持有";
-    currentRow.buyPrice = buy1Price;
-    currentRow.buyShares = buy1Shares;
-    currentRow.buyCash = buy1Price && buy1Shares ? round2(buy1Price * buy1Shares) : null;
-    currentRow.buyLabel =
-      buy1Price && buy1Shares
-        ? `¥${buy1Price.toFixed(2)} 买 ${buy1Shares.toLocaleString()}股`
-        : buy1Disabled ?? "暂停买入";
-  }
+  syncCurrentLadderRow(
+    currentRow,
+    2,
+    sell1Price,
+    sell1Shares,
+    sell1Disabled,
+    buy1Price,
+    buy1Shares,
+    buy1Disabled,
+  );
 
   const nextBuyPrice = buy1Price ?? currentPrice;
   const lotCost100 = Number((nextBuyPrice * 100).toFixed(2));
