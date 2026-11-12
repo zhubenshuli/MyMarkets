@@ -585,8 +585,8 @@ export interface MarketQuote {
   benchmark?: PorkQuoteBenchmark | null;
 }
 
-/** 潜力基金轨道类型："bottom_ambush" 底部埋伏型 | "right_breakout" 右侧启动型 */
-export type PotentialFundTrack = "bottom_ambush" | "right_breakout";
+/** 潜力基金轨道类型："bottom_ambush" 底部埋伏型 | "right_breakout" 右侧启动型 | "range_defense" 稳健防守/震荡型 */
+export type PotentialFundTrack = "bottom_ambush" | "right_breakout" | "range_defense";
 
 /** 潜力基金信号分级："prime" 黄金击球区(>=75) | "watch" 重点观察区(60~74) | "wait" 耐心等待区(<60) */
 export type PotentialFundTier = "prime" | "watch" | "wait";
@@ -666,6 +666,7 @@ export interface PotentialFundsOverview {
   primeCount: number;
   bottomAmbushCount: number;
   rightBreakoutCount: number;
+  rangeDefenseCount?: number;
   items: PotentialFundItem[];
 }
 

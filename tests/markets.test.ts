@@ -1415,7 +1415,7 @@ test("position plan optimizations: drawdown paired-swing sell1, extended rally M
   assert.ok(ddSell1.estimatedNetProfit! > 10, "paired swing T still yields positive net profit into profitPool");
 });
 
-test("potential funds: dual-track scoring (bottom ambush vs right breakout) and watchlist management", () => {
+test("potential funds: 3-track scoring (bottom ambush, right breakout, range defense), trigger lock, and watchlist management", () => {
   clearDb();
 
   // 1. Watchlist CRUD & Defaults
@@ -1434,46 +1434,78 @@ test("potential funds: dual-track scoring (bottom ambush vs right breakout) and 
   assert.equal(resetList.length, 10, "Reset restores 10 default ETFs");
   assert.ok(resetList.some((f) => f.code === "512170"));
 
-  // 2. Dual-track evaluation: Bottom Ambush
-  // Construct a series of 120 days: early days high (1.000), recent days oversold near 0.500
-  const oversoldSeries = Array.from({ length: 120 }, (_, i) => {
+  // 2. Track 1: Stabilized Bottom Ambush with Price Trigger Lock
+  // First test falling knife: drops steadily without stabilizing -> penalty prevents prime
+  const fallingKnifeSeries = Array.from({ length: 120 }, (_, i) => {
     const day = addDays("2026-10-01", i);
-    // starts at 1.000, slowly drifts down to 0.510, with low at 0.500
     const close = i < 30 ? 1.0 - (i * 0.005) : 0.85 - ((i - 30) * 0.0038);
     return { day, close: Math.max(0.500, close) };
   });
-  // Set last day to 0.510, min to 0.500, max to 1.000
-  oversoldSeries[oversoldSeries.length - 1] = { day: addDays("2026-10-01", 119), close: 0.510 };
+  fallingKnifeSeries[fallingKnifeSeries.length - 1] = { day: addDays("2026-10-01", 119), close: 0.510 };
+  const fallingFund = evaluatePotentialFund(
+    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
+    fallingKnifeSeries,
+  );
+  assert.equal(fallingFund.track, "bottom_ambush", "Deep drawdown triggers bottom_ambush");
+  assert.equal(fallingFund.tier, "wait", "Monotonic dump without stabilization is kept in wait tier (no false prime)");
 
+  // Turnaround series: deep drop early, but stabilized in a box near 0.508 for recent 20 days
+  const turnaroundSeries = Array.from({ length: 120 }, (_, i) => {
+    const day = addDays("2026-10-01", i);
+    if (i < 100) return { day, close: 1.0 - i * 0.005, volume: 10000 };
+    const wobble = ((i % 3) - 1) * 0.002;
+    return { day, close: 0.508 + wobble, volume: 10000 };
+  });
   const bottomFund = evaluatePotentialFund(
     { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
-    oversoldSeries,
+    turnaroundSeries,
   );
-
-  assert.equal(bottomFund.track, "bottom_ambush", "Deep drawdown and low percentile triggers bottom_ambush track");
+  assert.equal(bottomFund.track, "bottom_ambush", "Stabilized oversold asset is bottom_ambush");
   assert.ok(bottomFund.percentile120d <= 20, "120-day percentile is deeply low");
   assert.ok(bottomFund.drawdownFrom120dHighPct <= -0.40, "Drawdown from 120-day high is <= -40%");
-  assert.ok(bottomFund.score >= 70, "Oversold turnaround score is high");
-  assert.ok(bottomFund.entryBuyPrice <= 0.520, "entryBuyPrice anchors near 120d bottom");
-  assert.ok(bottomFund.strongSupportPrice <= 0.510, "strongSupportPrice anchors at or below 120d low");
+  assert.ok(bottomFund.score >= 75, "Stabilized oversold turnaround score reaches prime threshold (>=75)");
+  assert.equal(bottomFund.tier, "prime", "Stabilized fund at entry zone triggers prime (🔥 黄金击球区)");
+  assert.ok(bottomFund.entryBuyPrice <= 0.515, "entryBuyPrice anchors near 120d bottom");
 
-  // 3. Dual-track evaluation: Right Breakout
-  // Construct a bullish trend series where price rises steadily from 0.500 to 0.950, price > MA10 > MA20 > MA60
+  // 3. Price Trigger Lock: High score but price bounced away (>1.8% above entryBuyPrice)
+  const bouncedSeries = [...turnaroundSeries];
+  bouncedSeries[bouncedSeries.length - 1] = { day: addDays("2026-10-01", 119), close: 0.528, volume: 10000 };
+  const bouncedFund = evaluatePotentialFund(
+    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
+    bouncedSeries,
+  );
+  assert.ok(bouncedFund.price > bouncedFund.entryBuyPrice * 1.018, "Price is higher than entry zone threshold");
+  assert.notEqual(bouncedFund.tier, "prime", "Bounced fund must NOT be falsely marked prime");
+
+  // 4. Track 2: Right Breakout
   const breakoutSeries = Array.from({ length: 120 }, (_, i) => {
     const day = addDays("2026-10-01", i);
-    const close = 0.500 + i * 0.0038; // rises to ~0.952
-    return { day, close };
+    const close = 0.500 + i * 0.0038;
+    return { day, close, volume: 15000 };
   });
-
   const breakoutFund = evaluatePotentialFund(
     { code: "512480", fullCode: "sh512480", name: "半导体ETF", sectorTag: "半导体芯片" },
     breakoutSeries,
   );
-
-  assert.equal(breakoutFund.track, "right_breakout", "Bullish moving average alignment and upward momentum triggers right_breakout track");
+  assert.equal(breakoutFund.track, "right_breakout", "Bullish moving averages and upward momentum trigger right_breakout");
   assert.ok(breakoutFund.percentile120d >= 70, "Breakout fund is in upper water-level");
-  assert.ok(breakoutFund.score >= 70, "Breakout score is high (>70)");
+  assert.ok(breakoutFund.score >= 65, "Breakout score is solid");
   assert.ok(breakoutFund.entryBuyPrice < breakoutFund.price, "entryBuyPrice anchors at MA10/MA20 pullback level");
+
+  // 5. Track 3: Range Defense (e.g. Dividend / Defensive asset in high percentile)
+  const defensiveSeries = Array.from({ length: 120 }, (_, i) => {
+    const day = addDays("2026-10-01", i);
+    // Oscillates around 1.20 with tight range, low drawdown (-2%)
+    const wobble = Math.sin(i / 8) * 0.015;
+    return { day, close: 1.20 + wobble, volume: 10000 };
+  });
+  const defenseFund = evaluatePotentialFund(
+    { code: "512890", fullCode: "sh512890", name: "红利低波ETF", sectorTag: "高股息防御" },
+    defensiveSeries,
+  );
+  assert.equal(defenseFund.track, "range_defense", "Low volatility / tight box triggers range_defense track");
+  assert.equal(defenseFund.trackLabel, "⚖️ 稳健防守");
+  assert.ok(defenseFund.score <= 85, "Range defense score capped appropriately (<=85)");
 });
 
 

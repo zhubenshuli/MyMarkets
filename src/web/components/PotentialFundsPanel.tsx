@@ -121,6 +121,7 @@ export function PotentialFundsPanel({
     if (activeFilter === "prime") return item.tier === "prime";
     if (activeFilter === "bottom_ambush") return item.track === "bottom_ambush";
     if (activeFilter === "right_breakout") return item.track === "right_breakout";
+    if (activeFilter === "range_defense") return item.track === "range_defense";
     return true;
   });
 
@@ -222,7 +223,7 @@ export function PotentialFundsPanel({
                 跨赛道潜力基金与机会雷达
               </h2>
               <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-semibold text-accent-ink border border-accent/20">
-                双轨建仓雷达
+                三轨建仓雷达
               </span>
               <span className="text-[11px] text-ink-4">
                 更新于 {overview.updatedAt}
@@ -230,7 +231,7 @@ export function PotentialFundsPanel({
             </div>
 
             <p className="text-[13px] text-ink-3 leading-relaxed">
-              覆盖科技、医药、内需消费、大宗周期等高流动性核心行业 ETF。通过 120 日历史分位、高点回撤、均线多空与量价动量，双轨挖掘「🛡️ 底部超跌反转」与「🚀 右侧突破启动」机会，为首笔建仓与防守点位提供量化锚点。
+              覆盖科技、医药、内需消费、大宗周期与高股息等高流动性核心行业 ETF。通过 120 日历史分位、高点回撤、均线多空与量价动量，三轨挖掘「🛡️ 底部超跌反转」、「🚀 右侧突破启动」与「⚖️ 稳健高股息防守」机会，结合价格触发锁为首笔建仓与防守点位提供量化锚点。
             </p>
 
             {/* AI / Quant Overall Thesis */}
@@ -261,6 +262,9 @@ export function PotentialFundsPanel({
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-control bg-amber-soft px-3 py-1.5 border border-amber/30 font-medium text-amber-700 dark:text-amber-300">
                 🚀 右侧启动 <b>{overview.rightBreakoutCount}</b>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-control bg-emerald-soft px-3 py-1.5 border border-emerald/30 font-medium text-emerald-700 dark:text-emerald-300">
+                ⚖️ 稳健防守 <b>{overview.rangeDefenseCount ?? items.filter((i) => i.track === "range_defense").length}</b>
               </span>
             </div>
 
@@ -328,6 +332,17 @@ export function PotentialFundsPanel({
             >
               🚀 右侧启动 ({items.filter((i) => i.track === "right_breakout").length})
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveFilter("range_defense")}
+              className={`rounded-full px-3.5 py-1 text-[12.5px] font-semibold transition-colors ${
+                activeFilter === "range_defense"
+                  ? "bg-emerald-600 text-white shadow-xs"
+                  : "bg-surface text-ink-3 hover:text-ink border border-line"
+              }`}
+            >
+              ⚖️ 稳健防守 ({items.filter((i) => i.track === "range_defense").length})
+            </button>
           </div>
 
           {/* Watchlist Quick Add & Reset */}
@@ -385,7 +400,7 @@ export function PotentialFundsPanel({
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4.5">
           {filteredItems.map((item) => {
             const isHitPrime = item.tier === "prime";
-            const isNearEntry = item.price <= item.entryBuyPrice * 1.01;
+            const isNearEntry = item.price <= item.entryBuyPrice * 1.018;
             const diffPctToBuy = ((item.price - item.entryBuyPrice) / item.entryBuyPrice) * 100;
             const badgeClass = TONE_BADGE_CLASSES[item.tierTone] ?? TONE_BADGE_CLASSES.neutral;
 
@@ -429,10 +444,16 @@ export function PotentialFundsPanel({
                         className={`rounded-full px-2 py-0.5 text-[10.5px] font-bold border ${
                           item.track === "bottom_ambush"
                             ? "bg-sky-50 text-sky-700 border-sky-300/40 dark:bg-sky-950/40 dark:text-sky-300"
-                            : "bg-amber-50 text-amber-700 border-amber-300/40 dark:bg-amber-950/40 dark:text-amber-300"
+                            : item.track === "right_breakout"
+                              ? "bg-amber-50 text-amber-700 border-amber-300/40 dark:bg-amber-950/40 dark:text-amber-300"
+                              : "bg-emerald-50 text-emerald-700 border-emerald-300/40 dark:bg-emerald-950/40 dark:text-emerald-300"
                         }`}
                       >
-                        {item.track === "bottom_ambush" ? "🛡️ 底部埋伏" : "🚀 右侧启动"}
+                        {item.track === "bottom_ambush"
+                          ? "🛡️ 底部埋伏"
+                          : item.track === "right_breakout"
+                            ? "🚀 右侧启动"
+                            : "⚖️ 稳健防守"}
                       </span>
 
                       {/* Remove Button */}
@@ -556,7 +577,7 @@ export function PotentialFundsPanel({
                         {isNearEntry
                           ? "已进入建议区间"
                           : diffPctToBuy > 0
-                            ? `距建仓位需跌 ${fmt(diffPctToBuy, 1)}%`
+                            ? `待回踩 -${fmt(diffPctToBuy, 1)}%`
                             : "已击穿首笔买点"}
                       </span>
                     </div>
