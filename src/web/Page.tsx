@@ -66,7 +66,7 @@ export const MARKET_TABS: readonly MarketTabDef[] = [
     icon: "🎯",
     group: "opportunity",
     category: "funds",
-    description: "跨赛道高流动性行业龙头ETF配置雷达，双轨监控底部超跌埋伏与右侧启动建仓机会",
+    description: "跨赛道高流动性行业龙头ETF配置雷达，三轨监控底部超跌埋伏、右侧突破启动与稳健防守低吸机会",
   },
   {
     key: "models",
@@ -1252,7 +1252,7 @@ export default function MarketsPage() {
   }, []);
 
   const handleManualRefresh = async (
-    category: "pork" | "aviation" | "hstech" | "macro" | "all",
+    category: MarketCategory | "all",
     mode: "all" | "quotes" | "ai",
   ) => {
     const key = `${category}:${mode}`;
@@ -1612,7 +1612,8 @@ export default function MarketsPage() {
                 overview={data.potentialFunds}
                 onMarketsUpdated={setData}
                 onTriggerRefresh={handleManualRefresh}
-                refreshing={refreshingTarget === "funds"}
+                refreshing={refreshingTarget === "funds:all"}
+                feedbackNotice={sectorNotices.funds}
               />
             ) : loading && quotes.length === 0 ? (
               <div className="card p-8 text-center text-[13.5px] text-ink-3">正在加载行情数据…</div>

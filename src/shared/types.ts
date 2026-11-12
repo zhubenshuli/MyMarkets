@@ -615,7 +615,7 @@ export interface PotentialFundItem extends PotentialFundWatchItem {
   change1w: number | null;
   change1m: number | null;
   change3m: number | null;
-  /** 双轨分类："bottom_ambush" 底部埋伏 | "right_breakout" 右侧启动 */
+  /** 三轨分类："bottom_ambush" 底部埋伏 | "right_breakout" 右侧启动 | "range_defense" 稳健防守/震荡 */
   track: PotentialFundTrack;
   trackLabel: string;
   /** 综合潜力评分 (0 ~ 100) */
@@ -632,18 +632,28 @@ export interface PotentialFundItem extends PotentialFundWatchItem {
   low20d: number;
   high120d: number;
   low120d: number;
+  /** 实际参与分位计算的交易日样本数（最高120） */
+  valuationWindowDays?: number;
   /** 当前价处于近120日高低点区间的分位值 (0 ~ 100) */
   percentile120d: number;
   /** 较近120日高点回撤比例（负数，如 -0.215 表示 -21.5%） */
   drawdownFrom120dHighPct: number;
   volumeRatio20d: number | null;
   volumeSignal: string;
-  /** 建仓击球区指导 */
+  /** 实时IOPV参考净值及折溢价率（小数，如 0.168 表示 +16.8% 溢价） */
+  iopv?: number | null;
+  discountPremiumPct?: number | null;
+  /** 建仓击球区与目标盈亏比指导 */
   entryBuyPrice: number;
   entryBuyDistancePct: number;
   entryBuyAnchor: string;
   strongSupportPrice: number;
   strongSupportAnchor: string;
+  takeProfitPrice?: number;
+  takeProfitAnchor?: string;
+  riskRewardRatio?: number | null;
+  isNearEntry?: boolean;
+  entryStatusLabel?: string;
   strategyModeLabel: string;
   /** 研判点评（优先展示 AI 点评，回退至规则点评） */
   comment: string;
@@ -655,6 +665,8 @@ export interface PotentialFundItem extends PotentialFundWatchItem {
 /** 潜力基金雷达全局视图数据 */
 export interface PotentialFundsOverview {
   updatedAt: string;
+  /** 最新净值/行情所属交易日 (YYYY-MM-DD) */
+  marketDay?: string | null;
   source: "ai" | "rules";
   model?: string | null;
   channelId?: string | null;

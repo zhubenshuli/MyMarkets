@@ -280,20 +280,32 @@ export function getStoredAnalysis(key: string): PorkMarketAnalysis | null {
   }
 }
 
-export function pruneStoredCloses(cutoffDaily: string, cutoffPeriodic: string, periodicSymbols: string[]): number {
+export function pruneStoredCloses(
+  cutoffDaily: string,
+  cutoffPeriodic: string,
+  periodicSymbols: string[],
+  cutoffFundDaily?: string
+): number {
   const db = getDb();
   let deleted = 0;
+  const dailyCondition = cutoffFundDaily
+    ? "((symbol LIKE 'pf_%' AND day < ?) OR (symbol NOT LIKE 'pf_%' AND day < ?))"
+    : "day < ?";
+  const dailyParams = cutoffFundDaily ? [cutoffFundDaily, cutoffDaily] : [cutoffDaily];
+
   if (periodicSymbols.length > 0) {
     const placeholders = periodicSymbols.map(() => "?").join(", ");
     const resDaily = db
-      .prepare(`DELETE FROM market_daily_closes WHERE symbol NOT IN (${placeholders}) AND day < ?`)
-      .run(...periodicSymbols, cutoffDaily);
+      .prepare(`DELETE FROM market_daily_closes WHERE symbol NOT IN (${placeholders}) AND ${dailyCondition}`)
+      .run(...periodicSymbols, ...dailyParams);
     const resPeriodic = db
       .prepare(`DELETE FROM market_daily_closes WHERE symbol IN (${placeholders}) AND day < ?`)
       .run(...periodicSymbols, cutoffPeriodic);
     deleted = Number(resDaily.changes) + Number(resPeriodic.changes);
   } else {
-    const resDaily = db.prepare("DELETE FROM market_daily_closes WHERE day < ?").run(cutoffDaily);
+    const resDaily = db
+      .prepare(`DELETE FROM market_daily_closes WHERE ${dailyCondition}`)
+      .run(...dailyParams);
     deleted = Number(resDaily.changes);
   }
   return deleted;

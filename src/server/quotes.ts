@@ -765,8 +765,9 @@ export interface KlinePoint {
 }
 
 /** The daily closes (and optional OHLCV) in a Sina/Tencent/Eastmoney/Yangzhu answer, oldest first. */
-export function parseKlines(body: unknown, opts?: { includeOhlcv?: boolean }): KlinePoint[] {
+export function parseKlines(body: unknown, opts?: { includeOhlcv?: boolean; limit?: number }): KlinePoint[] {
   const withOhlcv = Boolean(opts?.includeOhlcv);
+  const limit = opts?.limit && opts.limit > 0 ? Math.min(Math.trunc(opts.limit), 360) : HISTORY;
   const check = (
     day: unknown,
     close: unknown,
@@ -798,7 +799,7 @@ export function parseKlines(body: unknown, opts?: { includeOhlcv?: boolean }): K
   // 1. Array of Sina futures rows: [{ date: "...", close: "..." }, ...] or [{ d: "...", c: "..." }]
   if (Array.isArray(body)) {
     if (body.length === 0) throw new Error("no klines in the answer");
-    return body.slice(-HISTORY).map((row) => {
+    return body.slice(-limit).map((row) => {
       const r = row as {
         date?: unknown; close?: unknown; high?: unknown; low?: unknown; volume?: unknown;
         d?: unknown; c?: unknown; h?: unknown; l?: unknown; v?: unknown;
@@ -822,7 +823,7 @@ export function parseKlines(body: unknown, opts?: { includeOhlcv?: boolean }): K
   const emData = obj.data as { klines?: unknown[] } | undefined;
   if (emData && Array.isArray(emData.klines)) {
     if (emData.klines.length === 0) throw new Error("no klines in the answer");
-    return emData.klines.slice(-HISTORY).map((line) => {
+    return emData.klines.slice(-limit).map((line) => {
       if (typeof line !== "string") throw new Error(`unreadable kline ${String(line)}`);
       const parts = line.split(",");
       return check(parts[0], parts[2], line, parts[3], parts[4], parts[5]);
@@ -860,7 +861,7 @@ export function parseKlines(body: unknown, opts?: { includeOhlcv?: boolean }): K
     }
     if (closes.length === 0) throw new Error("no readable klines in the answer");
     closes.sort((a, b) => a.day.localeCompare(b.day));
-    return closes.slice(-HISTORY);
+    return closes.slice(-limit);
   }
 
   // 4. Tencent K-line answer: { data: { [code]: { day: [...], qfqday: [...], qt: [...] } } }
@@ -868,7 +869,7 @@ export function parseKlines(body: unknown, opts?: { includeOhlcv?: boolean }): K
   const [code, entry] = data && typeof data === "object" && !Array.isArray(data) ? (Object.entries(data)[0] ?? []) : [];
   const lines = entry?.day ?? entry?.qfqday;
   if (!Array.isArray(lines) || lines.length === 0) throw new Error("no klines in the answer");
-  const closes = lines.slice(-HISTORY).map((line) => {
+  const closes = lines.slice(-limit).map((line) => {
     if (!Array.isArray(line)) throw new Error(`unreadable kline ${String(line)}`);
     return check(line[0], line[2], line, line[3], line[4], line[5]);
   });
@@ -3991,7 +3992,8 @@ export async function readMarkets(opts?: { skipAnalysis?: boolean }): Promise<Ma
 export async function pruneMarkets(now: Date): Promise<Record<string, number>> {
   const periodicSymbols = INSTRUMENTS.filter((i) => i.session === "spot-periodic").map((i) => i.symbol);
   const cutoffDaily = addDays(beijingDate(now), -180);
+  const cutoffFundDaily = addDays(beijingDate(now), -270);
   const cutoffPeriodic = addDays(beijingDate(now), -1095);
-  const deleted = pruneStoredCloses(cutoffDaily, cutoffPeriodic, periodicSymbols);
+  const deleted = pruneStoredCloses(cutoffDaily, cutoffPeriodic, periodicSymbols, cutoffFundDaily);
   return { marketCloses: deleted };
 }

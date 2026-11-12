@@ -14,6 +14,8 @@ import {
   insertLlmCall,
   setDailyFrozenPlan,
   setStoredAnalysis,
+  setStoredJson,
+  upsertCloses,
 } from "../src/server/db.ts";
 import {
   evaluateDcaLumpSumRules,
@@ -25,6 +27,8 @@ import {
 import {
   evaluatePotentialFund,
   getPotentialFundsWatchlist,
+  isHeadlineConsistent,
+  readPotentialFundsOverview,
   removePotentialFundFromWatchlist,
   resetPotentialFundsWatchlist,
   DEFAULT_POTENTIAL_FUNDS,
@@ -455,13 +459,24 @@ test("one instrument failing leaves the others current, and the run reports it",
   assert.equal(remaining.includes("hog_spot"), true);
 });
 
-test("daily closes older than half a year are pruned while quarterly capacity series keep multi-quarter history", async () => {
+test("daily closes older than half a year are pruned while quarterly capacity series and pf_* fund history keep longer windows", async () => {
   await refreshMarkets(new Date("2026-10-28T10:00:00+08:00"), async () => closes(200, 120), stubRate);
+  // Seed one pf_* fund with 290 days of history (inside 270d should stay, >=270d should be pruned)
+  const fundRows = Array.from({ length: 290 }, (_, i) => ({
+    symbol: "pf_512170",
+    day: addDays("2026-10-28", i - 289),
+    close: 0.4 + i * 0.001,
+  }));
+  upsertCloses(fundRows);
+
   const { marketCloses } = await pruneMarkets(new Date("2026-10-28T10:00:00+08:00"));
   const dailyInstrumentCount = INSTRUMENTS.filter((i) => i.session !== "spot-periodic").length;
-  assert.equal(marketCloses, dailyInstrumentCount * 19);
+  // 290 days ending 2026-10-28 (-289..0): cutoffFundDaily (-270) prunes -289..-271 (19 rows) and keeps -270..0 (271 rows)
+  assert.equal(marketCloses, dailyInstrumentCount * 19 + 19);
   const sowCount = countClosesBySymbol("sow_inventory");
   assert.equal(sowCount, 200, "periodic capacity rows within 3 years are retained");
+  const fundKept = countClosesBySymbol("pf_512170");
+  assert.equal(fundKept, 271, "pf_* retains 270 calendar days back from reference date (>= 120 trading bars)");
 });
 
 test("pork analysis provides cyclical stage, warning level, headline, and multi-dimensional assessments", async () => {
@@ -1443,7 +1458,7 @@ test("potential funds: 3-track scoring (bottom ambush, right breakout, range def
   });
   fallingKnifeSeries[fallingKnifeSeries.length - 1] = { day: addDays("2026-10-01", 119), close: 0.510 };
   const fallingFund = evaluatePotentialFund(
-    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
+    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗", thesis: "逆周期医疗" },
     fallingKnifeSeries,
   );
   assert.equal(fallingFund.track, "bottom_ambush", "Deep drawdown triggers bottom_ambush");
@@ -1457,21 +1472,24 @@ test("potential funds: 3-track scoring (bottom ambush, right breakout, range def
     return { day, close: 0.508 + wobble, volume: 10000 };
   });
   const bottomFund = evaluatePotentialFund(
-    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
+    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗", thesis: "逆周期医疗" },
     turnaroundSeries,
   );
   assert.equal(bottomFund.track, "bottom_ambush", "Stabilized oversold asset is bottom_ambush");
+  assert.equal(bottomFund.valuationWindowDays, 120, "Evaluates full 120 trading bars");
   assert.ok(bottomFund.percentile120d <= 20, "120-day percentile is deeply low");
   assert.ok(bottomFund.drawdownFrom120dHighPct <= -0.40, "Drawdown from 120-day high is <= -40%");
   assert.ok(bottomFund.score >= 75, "Stabilized oversold turnaround score reaches prime threshold (>=75)");
   assert.equal(bottomFund.tier, "prime", "Stabilized fund at entry zone triggers prime (🔥 黄金击球区)");
+  assert.equal(bottomFund.isNearEntry, true);
   assert.ok(bottomFund.entryBuyPrice <= 0.515, "entryBuyPrice anchors near 120d bottom");
+  assert.ok((bottomFund.takeProfitPrice ?? 0) > bottomFund.price, "Provides upside take-profit target");
 
   // 3. Price Trigger Lock: High score but price bounced away (>1.8% above entryBuyPrice)
   const bouncedSeries = [...turnaroundSeries];
   bouncedSeries[bouncedSeries.length - 1] = { day: addDays("2026-10-01", 119), close: 0.528, volume: 10000 };
   const bouncedFund = evaluatePotentialFund(
-    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
+    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗", thesis: "逆周期医疗" },
     bouncedSeries,
   );
   assert.ok(bouncedFund.price > bouncedFund.entryBuyPrice * 1.018, "Price is higher than entry zone threshold");
@@ -1484,7 +1502,7 @@ test("potential funds: 3-track scoring (bottom ambush, right breakout, range def
     return { day, close, volume: 15000 };
   });
   const breakoutFund = evaluatePotentialFund(
-    { code: "512480", fullCode: "sh512480", name: "半导体ETF", sectorTag: "半导体芯片" },
+    { code: "512480", fullCode: "sh512480", name: "半导体ETF", sectorTag: "半导体芯片", thesis: "国产替代" },
     breakoutSeries,
   );
   assert.equal(breakoutFund.track, "right_breakout", "Bullish moving averages and upward momentum trigger right_breakout");
@@ -1500,12 +1518,135 @@ test("potential funds: 3-track scoring (bottom ambush, right breakout, range def
     return { day, close: 1.20 + wobble, volume: 10000 };
   });
   const defenseFund = evaluatePotentialFund(
-    { code: "512890", fullCode: "sh512890", name: "红利低波ETF", sectorTag: "高股息防御" },
+    { code: "512890", fullCode: "sh512890", name: "红利低波ETF", sectorTag: "高股息防御", thesis: "高分红低波动" },
     defensiveSeries,
   );
   assert.equal(defenseFund.track, "range_defense", "Low volatility / tight box triggers range_defense track");
   assert.equal(defenseFund.trackLabel, "⚖️ 稳健防守");
   assert.ok(defenseFund.score <= 85, "Range defense score capped appropriately (<=85)");
+});
+
+test("potential funds: parseKlines limit, falling-knife 1x volume crash guard, QDII IOPV premium circuit breaker, intraday volume scaling, and AI staleness guard", async () => {
+  clearDb();
+
+  // 1. parseKlines respects custom limit (180) instead of truncating at HISTORY=90
+  const emPayload = {
+    data: {
+      klines: Array.from({ length: 150 }, (_, i) => `${addDays("2026-01-01", i)},1.00,${(1.0 + i * 0.001).toFixed(3)},1.05,0.99,10000`),
+    },
+  };
+  assert.equal(parseKlines(emPayload).length, 90, "Default parseKlines preserves HISTORY=90 limit");
+  assert.equal(
+    parseKlines(emPayload, { includeOhlcv: true, limit: 180 }).length,
+    150,
+    "limit: 180 preserves >120 trading bars for fund percentile calculation",
+  );
+
+  // 2. Normal-volume sharp dump (-3% day, -5.7% week, bearish MA cascade) stays in wait with warning (not score 74)
+  const dumpSeries = Array.from({ length: 120 }, (_, i) => {
+    const day = addDays("2026-07-01", i);
+    const close = i < 100 ? 1.80 - i * 0.0025 : i < 115 ? 1.56 : 1.56 - (i - 114) * 0.018;
+    return { day, close, high: close + 0.008, low: close - 0.008, volume: 10000 };
+  });
+  dumpSeries[dumpSeries.length - 1] = {
+    ...dumpSeries[dumpSeries.length - 1],
+    close: 1.43,
+    low: 1.425,
+    high: 1.48,
+    volume: 10000,
+  };
+  const dumpFund = evaluatePotentialFund(
+    { code: "512400", fullCode: "sh512400", name: "有色金属ETF", sectorTag: "有色资源", thesis: "战略资源" },
+    dumpSeries,
+  );
+  assert.equal(dumpFund.tier, "wait", "Active crash stays in wait tier even at 1.0x volume");
+  assert.ok(dumpFund.score < 55, `Sharp dump score (${dumpFund.score}) should stay well below watch threshold`);
+  assert.equal(dumpFund.isNearEntry, false);
+  assert.ok(dumpFund.entryStatusLabel?.includes("跌破"), "Breakdown explicitly warns against catching falling knife");
+
+  // 3. Mid-range falling high-beta QDII ETF must NOT classify as high-dividend defense, and +16.8% IOPV premium blocks prime
+  const qdiiSeries = Array.from({ length: 120 }, (_, i) => {
+    const day = addDays("2026-07-01", i);
+    // High-beta swing 1.85 -> 2.40 -> pullback to 2.22 (below MA20)
+    const close = i < 70 ? 1.85 + i * 0.0078 : 2.39 - (i - 70) * 0.0034;
+    return { day, close, volume: 20000 };
+  });
+  const qdiiFund = evaluatePotentialFund(
+    { code: "513100", fullCode: "sh513100", name: "纳指ETF", sectorTag: "全球跨境", thesis: "全球科技配置" },
+    qdiiSeries,
+    null,
+    { iopv: 1.899, discountPremiumPct: 0.168 },
+  );
+  assert.notEqual(qdiiFund.track, "range_defense", "Pulling-back high-beta QDII should not masquerade as range_defense");
+  assert.ok(!qdiiFund.strategyModeLabel.includes("高股息"), "QDII must never carry 高股息防御底仓 label");
+  assert.notEqual(qdiiFund.tier, "prime", "+16.8% IOPV premium blocks prime signal");
+  assert.ok(qdiiFund.entryStatusLabel?.includes("溢价"), "UI status explicitly highlights high IOPV premium");
+
+  // Even if low volatility defense box looks perfect, >= 5% IOPV premium blocks prime
+  const premBox = Array.from({ length: 120 }, (_, i) => ({
+    day: addDays("2026-07-01", i),
+    close: 1.20 + Math.sin(i / 8) * 0.01,
+    volume: 10000,
+  }));
+  const overPricedDefense = evaluatePotentialFund(
+    { code: "512890", fullCode: "sh512890", name: "红利低波ETF", sectorTag: "高股息防御", thesis: "防御" },
+    premBox,
+    null,
+    { iopv: 1.10, discountPremiumPct: 0.09 },
+  );
+  assert.notEqual(overPricedDefense.tier, "prime", "High IOPV premium prevents prime even inside box");
+
+  // 4. Time-aware intraday volume scaling vs post-close exact volume
+  const volSeries = Array.from({ length: 25 }, (_, i) => ({
+    day: addDays("2026-11-12", i - 24),
+    close: 1.0,
+    volume: i === 24 ? 3000 : 10000, // latest day has 0.30x of 20d avg so far
+  }));
+  const morningScaled = evaluatePotentialFund(
+    { code: "512480", fullCode: "sh512480", name: "半导体ETF", sectorTag: "半导体", thesis: "芯片" },
+    volSeries,
+    null,
+    { now: new Date("2026-11-12T10:30:00+08:00") }, // 60/240 = 0.25 of day -> 0.30 / 0.25 = 1.20x
+  );
+  assert.equal(morningScaled.volumeRatio20d, 1.2, "0.30x vs closed 20d avg at 10:30 BJT (25% elapsed) projects to 1.20x full-day pace");
+  const afterCloseExact = evaluatePotentialFund(
+    { code: "512480", fullCode: "sh512480", name: "半导体ETF", sectorTag: "半导体", thesis: "芯片" },
+    volSeries,
+    null,
+    { now: new Date("2026-11-12T15:10:00+08:00") },
+  );
+  assert.equal(afterCloseExact.volumeRatio20d, 0.31, "Post-close (15:10 BJT) preserves actual settled volume ratio without yesterday fallback");
+
+  // 5. AI headline hallucination & staleness guard
+  const sampleItem = dumpFund; // wait tier, 512400 有色金属ETF
+  assert.equal(
+    isHeadlineConsistent("当前关注有色金属ETF触发黄金击球区", [sampleItem]),
+    false,
+    "Rejects AI headline claiming a wait-tier fund is prime",
+  );
+  assert.equal(
+    isHeadlineConsistent("当前暂无黄金击球标的，多品种处于观察等待", [sampleItem]),
+    true,
+    "Accepts honest headline when primeCount === 0",
+  );
+
+  // Integration check on readPotentialFundsOverview rejecting stale AI cache
+  setStoredJson("markets.potential_funds_watchlist", [
+    { code: "512400", fullCode: "sh512400", name: "有色金属ETF", sectorTag: "有色资源", thesis: "资源", isBuiltin: true },
+  ]);
+  upsertCloses(dumpSeries.map((p) => ({ symbol: "pf_512400", day: p.day, close: p.close, high: p.high, low: p.low, volume: p.volume })));
+  setStoredJson("markets.potential_funds_ai", {
+    headline: "有色金属ETF触发黄金击球区",
+    allocationAdvice: "立即重仓买入",
+    fundComments: [{ code: "512400", comment: "黄金买点" }],
+    analyzedAt: "2026-10-01T10:00:00Z", // stale vs latest bar
+    watchlistKey: "512400",
+    primeCodes: ["512400"],
+    scores: { "512400": 78 },
+  });
+  const overview = await readPotentialFundsOverview();
+  assert.equal(overview.source, "rules", "Stale / inconsistent AI overview falls back safely to accurate rules");
+  assert.ok(!overview.headline.includes("有色金属ETF触发"), "Fallback headline never hallucinates fake prime fund");
 });
 
 

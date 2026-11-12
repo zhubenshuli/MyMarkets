@@ -1,11 +1,11 @@
 import { useState } from "react";
+import { beijingDateTimeSec } from "../../shared/time.ts";
 import type {
   MarketCategory,
   MarketsAnswer,
   PorkStatusTone,
   PotentialFundItem,
   PotentialFundsOverview,
-  PotentialFundTier,
   PotentialFundTrack,
 } from "../../shared/types.ts";
 
@@ -91,13 +91,16 @@ export function PotentialFundsPanel({
   onMarketsUpdated,
   onTriggerRefresh,
   refreshing,
+  feedbackNotice,
 }: {
   overview: PotentialFundsOverview | null | undefined;
   onMarketsUpdated: (data: MarketsAnswer) => void;
-  onTriggerRefresh: (category: MarketCategory, mode: "all" | "quotes" | "ai") => Promise<void>;
+  onTriggerRefresh: (category: MarketCategory | "all", mode: "all" | "quotes" | "ai") => Promise<void>;
   refreshing?: boolean;
+  feedbackNotice?: { text: string; isError?: boolean } | null;
 }) {
   const [activeFilter, setActiveFilter] = useState<"all" | "prime" | PotentialFundTrack>("all");
+  const [sortBy, setSortBy] = useState<"score" | "distance" | "percentile">("score");
   const [newCode, setNewCode] = useState("");
   const [newSector, setNewSector] = useState("");
   const [newThesis, setNewThesis] = useState("");
@@ -116,14 +119,25 @@ export function PotentialFundsPanel({
 
   const items = overview.items ?? [];
 
-  // Filter items
-  const filteredItems = items.filter((item) => {
-    if (activeFilter === "prime") return item.tier === "prime";
-    if (activeFilter === "bottom_ambush") return item.track === "bottom_ambush";
-    if (activeFilter === "right_breakout") return item.track === "right_breakout";
-    if (activeFilter === "range_defense") return item.track === "range_defense";
-    return true;
-  });
+  // Filter & sort items
+  const filteredItems = items
+    .filter((item) => {
+      if (activeFilter === "prime") return item.tier === "prime";
+      if (activeFilter === "bottom_ambush") return item.track === "bottom_ambush";
+      if (activeFilter === "right_breakout") return item.track === "right_breakout";
+      if (activeFilter === "range_defense") return item.track === "range_defense";
+      return true;
+    })
+    .slice()
+    .sort((a, b) => {
+      if (sortBy === "distance") {
+        return Math.abs(a.entryBuyDistancePct) - Math.abs(b.entryBuyDistancePct);
+      }
+      if (sortBy === "percentile") {
+        return a.percentile120d - b.percentile120d;
+      }
+      return b.score - a.score;
+    });
 
   const handleAddFund = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,7 +240,11 @@ export function PotentialFundsPanel({
                 三轨建仓雷达
               </span>
               <span className="text-[11px] text-ink-4">
-                更新于 {overview.updatedAt}
+                更新于 {beijingDateTimeSec(overview.updatedAt)}
+                {overview.marketDay ? ` · 行情日 ${overview.marketDay}` : ""}
+              </span>
+              <span className="rounded bg-bg-sunk px-2 py-0.5 text-[10.5px] font-medium text-ink-3 border border-line-soft">
+                {overview.source === "ai" ? `🤖 AI 研判${overview.model ? ` (${overview.model})` : ""}` : "📐 量化规则"}
               </span>
             </div>
 
@@ -257,18 +275,27 @@ export function PotentialFundsPanel({
               <span className="inline-flex items-center gap-1.5 rounded-control bg-hot-soft px-3 py-1.5 border border-hot/30 font-semibold text-hot">
                 🔥 黄金击球区 <b className="font-bold">{overview.primeCount}</b>
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-control bg-sky-soft px-3 py-1.5 border border-sky/30 font-medium text-sky-700 dark:text-sky-300">
+              <span className="inline-flex items-center gap-1.5 rounded-control bg-sky-50 dark:bg-sky-950/40 px-3 py-1.5 border border-sky-300/40 dark:border-sky-700/40 font-medium text-sky-700 dark:text-sky-300">
                 🛡️ 底部埋伏 <b>{overview.bottomAmbushCount}</b>
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-control bg-amber-soft px-3 py-1.5 border border-amber/30 font-medium text-amber-700 dark:text-amber-300">
+              <span className="inline-flex items-center gap-1.5 rounded-control bg-amber-soft px-3 py-1.5 border border-amber/30 font-medium text-amber-ink">
                 🚀 右侧启动 <b>{overview.rightBreakoutCount}</b>
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-control bg-emerald-soft px-3 py-1.5 border border-emerald/30 font-medium text-emerald-700 dark:text-emerald-300">
+              <span className="inline-flex items-center gap-1.5 rounded-control bg-emerald-50 dark:bg-emerald-950/40 px-3 py-1.5 border border-emerald-300/40 dark:border-emerald-700/40 font-medium text-emerald-700 dark:text-emerald-300">
                 ⚖️ 稳健防守 <b>{overview.rangeDefenseCount ?? items.filter((i) => i.track === "range_defense").length}</b>
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {feedbackNotice && (
+                <span
+                  className={`text-[11.5px] font-medium ${
+                    feedbackNotice.isError ? "text-hot" : "text-ok-ink"
+                  }`}
+                >
+                  {feedbackNotice.text}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => void onTriggerRefresh("funds", "all")}
@@ -345,9 +372,31 @@ export function PotentialFundsPanel({
             </button>
           </div>
 
-          {/* Watchlist Quick Add & Reset */}
+          {/* Watchlist Quick Add, Sort & Reset */}
           <div className="flex flex-wrap items-center gap-2">
-            <form onSubmit={handleAddFund} className="flex items-center gap-1.5">
+            <div className="inline-flex items-center rounded-control border border-line bg-surface p-0.5 text-[11px]">
+              <span className="px-1.5 text-ink-4">排序:</span>
+              {(
+                [
+                  ["score", "评分"],
+                  ["distance", "距买点"],
+                  ["percentile", "低分位"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSortBy(key)}
+                  className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                    sortBy === key ? "bg-accent text-accent-contrast" : "text-ink-3 hover:text-ink"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleAddFund} className="flex flex-wrap items-center gap-1.5">
               <input
                 type="text"
                 placeholder="6位代码(如 512170)"
@@ -356,10 +405,26 @@ export function PotentialFundsPanel({
                 onChange={(e) => setNewCode(e.target.value)}
                 className="w-32 rounded-control border border-line bg-surface px-2.5 py-1 text-[12px] text-ink focus:border-accent focus:outline-hidden"
               />
+              <input
+                type="text"
+                placeholder="赛道(选填)"
+                maxLength={16}
+                value={newSector}
+                onChange={(e) => setNewSector(e.target.value)}
+                className="w-24 rounded-control border border-line bg-surface px-2 py-1 text-[12px] text-ink focus:border-accent focus:outline-hidden"
+              />
+              <input
+                type="text"
+                placeholder="选入逻辑(选填)"
+                maxLength={60}
+                value={newThesis}
+                onChange={(e) => setNewThesis(e.target.value)}
+                className="w-36 rounded-control border border-line bg-surface px-2 py-1 text-[12px] text-ink focus:border-accent focus:outline-hidden"
+              />
               <button
                 type="submit"
                 disabled={isAdding || !newCode.trim()}
-                className="rounded-control bg-accent hover:bg-accent-hover text-accent-contrast px-3 py-1 text-[12px] font-semibold transition-colors disabled:opacity-40"
+                className="rounded-control bg-accent hover:opacity-90 text-accent-contrast px-3 py-1 text-[12px] font-semibold transition-opacity disabled:opacity-40"
               >
                 {isAdding ? "添加中…" : "+ 加入监控"}
               </button>
@@ -400,8 +465,21 @@ export function PotentialFundsPanel({
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4.5">
           {filteredItems.map((item) => {
             const isHitPrime = item.tier === "prime";
-            const isNearEntry = item.price <= item.entryBuyPrice * 1.018;
-            const diffPctToBuy = ((item.price - item.entryBuyPrice) / item.entryBuyPrice) * 100;
+            const premPct = item.discountPremiumPct ?? null;
+            const hasHighPremium = premPct !== null && premPct >= 0.03;
+            const isNearBuyPrice = item.isNearEntry ?? (!hasHighPremium && Math.abs(item.price - item.entryBuyPrice) / Math.max(0.001, item.entryBuyPrice) <= 0.018);
+            const diffPctToBuy = ((item.price - item.entryBuyPrice) / Math.max(0.001, item.entryBuyPrice)) * 100;
+            const statusText =
+              item.entryStatusLabel ||
+              (isHitPrime
+                ? "🔥 已进入黄金击球区"
+                : hasHighPremium
+                  ? `⚠️ 场内溢价 +${(premPct! * 100).toFixed(1)}%`
+                  : isNearBuyPrice
+                    ? "📍 贴近参考买点"
+                    : diffPctToBuy > 0
+                      ? `⏳ 待回踩 -${fmt(diffPctToBuy, 1)}%`
+                      : "⚠️ 已击穿参考买点");
             const badgeClass = TONE_BADGE_CLASSES[item.tierTone] ?? TONE_BADGE_CLASSES.neutral;
 
             return (
@@ -511,9 +589,28 @@ export function PotentialFundsPanel({
                         <span>
                           距高点:{" "}
                           <b className="font-semibold text-ok">
-                            -{fmtPct(Math.abs(item.drawdownFrom120dHighPct ?? 0), 1)}
+                            {(item.drawdownFrom120dHighPct ?? 0) <= 0
+                              ? `-${fmtPct(Math.abs(item.drawdownFrom120dHighPct ?? 0), 1)}`
+                              : `+${fmtPct(item.drawdownFrom120dHighPct ?? 0, 1)}`}
                           </b>
                         </span>
+                        {premPct !== null && (
+                          <>
+                            <span>·</span>
+                            <span
+                              className={`font-semibold ${
+                                premPct >= 0.03
+                                  ? "text-hot"
+                                  : premPct <= -0.005
+                                    ? "text-ok-ink"
+                                    : "text-ink-3"
+                              }`}
+                              title={item.iopv ? `实时参考净值 IOPV ¥${fmt(item.iopv)}` : undefined}
+                            >
+                              {premPct >= 0 ? `溢价 +${(premPct * 100).toFixed(2)}%` : `折价 ${(premPct * 100).toFixed(2)}%`}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -533,7 +630,7 @@ export function PotentialFundsPanel({
                   {/* 120-Day Range & Water-level Bar */}
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-[11px] text-ink-3">
-                      <span>120日估值水位</span>
+                      <span>{item.valuationWindowDays ?? 120}日估值水位</span>
                       <span className="font-semibold text-ink">
                         {fmt(item.percentile120d, 1)}% 分位
                         {(item.percentile120d ?? 50) <= 25
@@ -558,48 +655,63 @@ export function PotentialFundsPanel({
                     </div>
 
                     <div className="flex items-center justify-between text-[10px] text-ink-4">
-                      <span>120日低: ¥{fmt(item.low120d)}</span>
-                      <span>120日高: ¥{fmt(item.high120d)}</span>
+                      <span>区间低: ¥{fmt(item.low120d)}</span>
+                      <span>
+                        量比: {item.volumeRatio20d !== null ? `${fmt(item.volumeRatio20d, 2)}x` : "—"} ({item.volumeSignal})
+                      </span>
+                      <span>区间高: ¥{fmt(item.high120d)}</span>
                     </div>
                   </div>
 
                   {/* Entry Hitting Strategy Box (建议建仓价 & 强支撑防守) */}
                   <div className="rounded-control border border-line-soft bg-bg-sunk/60 p-3 space-y-2">
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="font-semibold text-ink-2">🎯 建仓雷达击球区</span>
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="font-semibold text-ink-2 shrink-0">🎯 建仓雷达击球区</span>
                       <span
-                        className={`font-semibold px-1.5 py-0.2 rounded text-[10px] ${
-                          isNearEntry
+                        className={`font-semibold px-1.5 py-0.5 rounded text-[10px] truncate ${
+                          isHitPrime
                             ? "bg-hot text-accent-contrast font-bold animate-pulse"
-                            : "bg-surface text-ink-3 border border-line"
+                            : hasHighPremium || statusText.includes("跌破")
+                              ? "bg-hot-soft text-hot border border-hot/30"
+                              : isNearBuyPrice
+                                ? "bg-amber-soft text-amber-ink border border-amber/30"
+                                : "bg-surface text-ink-3 border border-line"
                         }`}
                       >
-                        {isNearEntry
-                          ? "已进入建议区间"
-                          : diffPctToBuy > 0
-                            ? `待回踩 -${fmt(diffPctToBuy, 1)}%`
-                            : "已击穿首笔买点"}
+                        {statusText}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-[11.5px]">
+                    <div className="grid grid-cols-3 gap-1.5 text-[11px]">
                       <div className="rounded bg-surface p-2 border border-line">
-                        <div className="text-[10px] text-ink-4">建议首笔建仓价</div>
-                        <div className="num text-[14px] font-bold text-accent-ink mt-0.5">
+                        <div className="text-[9.5px] text-ink-4">建议买点</div>
+                        <div className="num text-[13.5px] font-bold text-accent-ink mt-0.5">
                           ¥{fmt(item.entryBuyPrice)}
                         </div>
-                        <div className="text-[9.5px] text-ink-4 truncate mt-0.5" title={item.entryBuyAnchor}>
+                        <div className="text-[9px] text-ink-4 truncate mt-0.5" title={item.entryBuyAnchor}>
                           {item.entryBuyAnchor || "估值支撑位"}
                         </div>
                       </div>
 
                       <div className="rounded bg-surface p-2 border border-line">
-                        <div className="text-[10px] text-ink-4">强支撑防守线</div>
-                        <div className="num text-[14px] font-bold text-ink-2 mt-0.5">
+                        <div className="text-[9.5px] text-ink-4">强支撑线</div>
+                        <div className="num text-[13.5px] font-bold text-ink-2 mt-0.5">
                           ¥{fmt(item.strongSupportPrice)}
                         </div>
-                        <div className="text-[9.5px] text-ink-4 truncate mt-0.5" title={item.strongSupportAnchor}>
+                        <div className="text-[9px] text-ink-4 truncate mt-0.5" title={item.strongSupportAnchor}>
                           {item.strongSupportAnchor || "大级别历史底"}
+                        </div>
+                      </div>
+
+                      <div className="rounded bg-surface p-2 border border-line">
+                        <div className="text-[9.5px] text-ink-4">
+                          目标{item.riskRewardRatio != null ? ` (${item.riskRewardRatio.toFixed(1)}:1)` : ""}
+                        </div>
+                        <div className="num text-[13.5px] font-bold text-ok-ink mt-0.5">
+                          ¥{fmt(item.takeProfitPrice ?? item.high20d)}
+                        </div>
+                        <div className="text-[9px] text-ink-4 truncate mt-0.5" title={item.takeProfitAnchor}>
+                          {item.takeProfitAnchor || "波段止盈位"}
                         </div>
                       </div>
                     </div>
@@ -611,8 +723,13 @@ export function PotentialFundsPanel({
 
                   {/* AI / Quant Commentary */}
                   <div className="text-[11.5px] text-ink-2 bg-surface rounded p-2.5 border border-line-soft leading-relaxed flex items-start gap-1.5">
-                    <span className="shrink-0 text-accent font-bold">💡</span>
-                    <span>{item.aiComment || item.comment || item.thesis}</span>
+                    <span
+                      className="shrink-0 text-accent font-bold"
+                      title={item.commentSource === "ai" ? "AI 智能点评" : "量化规则点评"}
+                    >
+                      💡
+                    </span>
+                    <span>{item.comment || item.thesis}</span>
                   </div>
                 </div>
 

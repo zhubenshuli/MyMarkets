@@ -74,6 +74,8 @@ export function startScheduler(): void {
       void runTask("markets.funds.daily", () => refreshPotentialFundsDaily(now));
     } else if (hm === "03:30") {
       void runTask("markets.retention", () => pruneMarkets(now));
+    } else if (hm === "15:05") {
+      void runTask("markets.funds.close", () => refreshPotentialFundsDaily(now));
     } else if (minute % 10 === 0) {
       void runTask("markets.macro.refresh", () => refreshMacroMarkets(now));
     }

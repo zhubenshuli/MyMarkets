@@ -22,6 +22,7 @@ const PURPOSE_LABEL: Record<string, string> = {
   aviation_stock_strategy: "🎯 中国东航(600115)策略",
   hstech_analysis: "🚀 恒生科技与成分股研判",
   hstech_etf_strategy: "🎯 恒生科技ETF(513180)策略",
+  potential_funds_analysis: "🎯 潜力基金跨赛道研判",
   market_analysis: "📊 产业链行情研判",
 };
 
@@ -37,7 +38,7 @@ export interface LlmChannelsPanelProps {
   hstechAnalysis?: PorkMarketAnalysis | null;
   onSelectSector?: (key: string) => void;
   onTriggerRefresh?: (
-    category: "pork" | "aviation" | "hstech" | "macro" | "all",
+    category: "pork" | "aviation" | "hstech" | "funds" | "macro" | "all",
     mode: "all" | "quotes" | "ai",
   ) => Promise<void>;
   refreshingTarget?: string | null;

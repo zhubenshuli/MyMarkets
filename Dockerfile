@@ -9,7 +9,7 @@ ARG NPM_REGISTRY=
 COPY package.json ./
 RUN npm install --no-audit --no-fund ${NPM_REGISTRY:+--registry=$NPM_REGISTRY}
 COPY . .
-RUN npm run build && npm prune --omit=dev --no-audit --no-fund
+RUN npm run typecheck && npm run build && npm prune --omit=dev --no-audit --no-fund
 
 FROM base
 ENV NODE_ENV=production
