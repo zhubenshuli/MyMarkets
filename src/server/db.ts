@@ -555,5 +555,25 @@ export function deleteDailyFrozenPlan(symbol?: string, day?: string): void {
   }
 }
 
+export function getStoredJson<T>(key: string): T | null {
+  const db = getDb();
+  const row = db.prepare("SELECT value FROM market_analyses WHERE key = ?").get(key) as { value: string } | undefined;
+  if (!row?.value) return null;
+  try {
+    return JSON.parse(row.value) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredJson(key: string, value: unknown): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO market_analyses (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, JSON.stringify(value), new Date().toISOString());
+}
+
 
 

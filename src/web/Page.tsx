@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import { beijingDateTimeSec, beijingStamp, monthDay } from "../shared/time.ts";
 import { LlmChannelsPanel } from "./components/LlmChannelsPanel.tsx";
 import { DilutedCostChart, PositionPlanPanel } from "./components/PositionPlanPanel.tsx";
+import { PotentialFundsPanel } from "./components/PotentialFundsPanel.tsx";
 import type {
   Etf516670Guidance,
   IndicatorAiInsight,
@@ -21,7 +22,7 @@ export interface MarketTabDef {
   key: string;
   label: string;
   icon: string;
-  group: "market" | "system";
+  group: "market" | "opportunity" | "system";
   category: MarketCategory;
   description: string;
 }
@@ -58,6 +59,14 @@ export const MARKET_TABS: readonly MarketTabDef[] = [
     group: "market",
     category: "hstech",
     description: "涵盖恒生科技指数、离岸汇率锚、腾讯阿里美团京东四大平台权重、小米中芯AI端侧算力先锋及恒生科技ETF（513180）周期配置与T+0波段指南",
+  },
+  {
+    key: "funds",
+    label: "潜力基金雷达",
+    icon: "🎯",
+    group: "opportunity",
+    category: "funds",
+    description: "跨赛道高流动性行业龙头ETF配置雷达，双轨监控底部超跌埋伏与右侧启动建仓机会",
   },
   {
     key: "models",
@@ -1289,6 +1298,7 @@ export default function MarketsPage() {
 
   const currentTab = MARKET_TABS.find((t) => t.key === tabKey) ?? MARKET_TABS[0]!;
   const marketGroupTabs = MARKET_TABS.filter((t) => t.group === "market");
+  const opportunityGroupTabs = MARKET_TABS.filter((t) => t.group === "opportunity");
   const systemGroupTabs = MARKET_TABS.filter((t) => t.group === "system");
 
   const { quotes, usdCnyRate, analysis, aviationAnalysis, hstechAnalysis } = data;
@@ -1298,6 +1308,10 @@ export default function MarketsPage() {
     if (key === "pork") return analysis?.source === "ai" ? "AI" : "规则";
     if (key === "aviation") return aviationAnalysis?.source === "ai" ? "AI" : "规则";
     if (key === "hstech") return hstechAnalysis?.source === "ai" ? "AI" : "规则";
+    if (key === "funds") {
+      const primeCount = data.potentialFunds?.primeCount ?? 0;
+      return primeCount > 0 ? `${primeCount} 机会` : "雷达";
+    }
     if (key === "macro") {
       const cnt = quotes.filter((q) => q.category === "macro").length;
       return cnt > 0 ? String(cnt) : null;
@@ -1372,6 +1386,49 @@ export default function MarketsPage() {
                             : badge === "AI"
                               ? "bg-accent-soft text-accent-ink"
                               : "bg-bg-sunk text-ink-4"
+                        }`}
+                      >
+                        {badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1.5 px-2.5 text-[11px] font-semibold tracking-wide text-ink-4">
+              潜力基金与机会雷达
+            </div>
+            <div className="space-y-1">
+              {opportunityGroupTabs.map((item) => {
+                const isActive = item.key === currentTab.key;
+                const badge = getTabBadge(item.key);
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    aria-current={isActive ? "page" : undefined}
+                    onClick={() => handleSelectTab(item.key)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-control px-2.5 py-2 text-left text-[13.5px] transition-colors ${
+                      isActive
+                        ? "bg-accent-soft font-bold text-accent-ink ring-1 ring-accent/25"
+                        : "font-medium text-ink-2 hover:bg-bg-sunk hover:text-ink"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="text-[15px] shrink-0">{item.icon}</span>
+                      <span className="truncate">{item.label}</span>
+                    </span>
+                    {badge && (
+                      <span
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${
+                          isActive
+                            ? "bg-accent text-accent-contrast"
+                            : badge.includes("机会")
+                              ? "bg-hot-soft text-hot border border-hot/30"
+                              : "bg-accent-soft text-accent-ink"
                         }`}
                       >
                         {badge}
@@ -1593,8 +1650,18 @@ export default function MarketsPage() {
                 </div>
               )}
 
+              {/* Tab: 潜力基金雷达 (双轨机会雷达 + 120日估值水位 + 首笔建仓/强支撑防守) */}
+              {currentTab.key === "funds" && (
+                <PotentialFundsPanel
+                  overview={data.potentialFunds}
+                  onMarketsUpdated={setData}
+                  onTriggerRefresh={handleManualRefresh}
+                  refreshing={refreshingTarget === "funds"}
+                />
+              )}
+
               {/* 默认兜底：未来增加新 Tab（如粮食作物、能源化工等）时的通用自适应渲染 */}
-              {currentTab.key !== "pork" && currentTab.key !== "aviation" && currentTab.key !== "hstech" && currentTab.key !== "macro" && (
+              {currentTab.key !== "pork" && currentTab.key !== "aviation" && currentTab.key !== "hstech" && currentTab.key !== "macro" && currentTab.key !== "funds" && (
                 <div>
                   <div className="border-b border-line pb-2 mb-4">
                     <h2 className="text-[17px] font-bold text-ink">{currentTab.label}</h2>

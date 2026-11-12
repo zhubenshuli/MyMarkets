@@ -3,6 +3,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { closeDb, countTotalCloses, getDistinctSymbols } from "./db.ts";
+import {
+  addPotentialFundToWatchlist,
+  removePotentialFundFromWatchlist,
+  resetPotentialFundsWatchlist,
+} from "./funds.ts";
 import { getChannelsOverview, resetChannelState } from "./lib/llm.ts";
 import {
   recordPositionSnapshot,
@@ -232,6 +237,50 @@ export function buildServer() {
       .header("Content-Type", "application/json; charset=utf-8")
       .header("Cache-Control", "no-store")
       .send(JSON.stringify({ ok: true, config, markets }));
+  });
+
+  app.post("/api/funds/watchlist", async (req, reply) => {
+    const body = (typeof req.body === "object" && req.body !== null ? req.body : {}) as {
+      code?: string;
+      sectorTag?: string;
+      thesis?: string;
+    };
+    const code = (body.code ?? "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      return reply.code(400).send({ error: "基金代码必须为 6 位纯数字（如 512170）" });
+    }
+    try {
+      const item = await addPotentialFundToWatchlist(code, body.sectorTag, body.thesis);
+      const markets = await readMarkets();
+      return reply
+        .header("Content-Type", "application/json; charset=utf-8")
+        .header("Cache-Control", "no-store")
+        .send(JSON.stringify({ ok: true, item, markets }));
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/funds/watchlist/:code", async (req, reply) => {
+    const code = ((req.params as { code?: string } | undefined)?.code ?? "").trim();
+    if (!/^\d{6}$/.test(code)) {
+      return reply.code(400).send({ error: "基金代码必须为 6 位纯数字" });
+    }
+    const removed = removePotentialFundFromWatchlist(code);
+    const markets = await readMarkets();
+    return reply
+      .header("Content-Type", "application/json; charset=utf-8")
+      .header("Cache-Control", "no-store")
+      .send(JSON.stringify({ ok: true, removed, markets }));
+  });
+
+  app.post("/api/funds/watchlist/reset", async (req, reply) => {
+    const watchlist = resetPotentialFundsWatchlist();
+    const markets = await readMarkets();
+    return reply
+      .header("Content-Type", "application/json; charset=utf-8")
+      .header("Cache-Control", "no-store")
+      .send(JSON.stringify({ ok: true, watchlist, markets }));
   });
 
   // Serve static frontend files or SPA index.html

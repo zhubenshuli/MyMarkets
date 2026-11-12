@@ -1,6 +1,6 @@
 // What GET /api/markets answers, read by the /markets page.
 
-export type MarketCategory = "pork" | "aviation" | "hstech" | "macro" | (string & {});
+export type MarketCategory = "pork" | "aviation" | "hstech" | "macro" | "funds" | "models" | (string & {});
 
 export type PorkStatusTone = "critical" | "caution" | "positive" | "accent" | "neutral";
 
@@ -585,6 +585,90 @@ export interface MarketQuote {
   benchmark?: PorkQuoteBenchmark | null;
 }
 
+/** 潜力基金轨道类型："bottom_ambush" 底部埋伏型 | "right_breakout" 右侧启动型 */
+export type PotentialFundTrack = "bottom_ambush" | "right_breakout";
+
+/** 潜力基金信号分级："prime" 黄金击球区(>=75) | "watch" 重点观察区(60~74) | "wait" 耐心等待区(<60) */
+export type PotentialFundTier = "prime" | "watch" | "wait";
+
+/** 潜力基金观察池配置项 */
+export interface PotentialFundWatchItem {
+  /** 6位基金代码，如 "512170" */
+  code: string;
+  /** 腾讯行情带市场前缀代码，如 "sh512170" 或 "sz159819" */
+  fullCode: string;
+  /** 基金简称，如 "医疗ETF" */
+  name: string;
+  /** 所属赛道标签，如 "医药医疗" */
+  sectorTag: string;
+  /** 选入逻辑简述 */
+  thesis: string;
+  /** 是否为系统内置默认标的 */
+  isBuiltin?: boolean;
+}
+
+/** 单只潜力基金完整雷达评估结果 */
+export interface PotentialFundItem extends PotentialFundWatchItem {
+  day: string;
+  price: number;
+  changeYesterday: number | null;
+  change1w: number | null;
+  change1m: number | null;
+  change3m: number | null;
+  /** 双轨分类："bottom_ambush" 底部埋伏 | "right_breakout" 右侧启动 */
+  track: PotentialFundTrack;
+  trackLabel: string;
+  /** 综合潜力评分 (0 ~ 100) */
+  score: number;
+  /** 信号分级 */
+  tier: PotentialFundTier;
+  tierLabel: string;
+  tierTone: PorkStatusTone;
+  /** 技术面与120日位置指标 */
+  ma10: number;
+  ma20: number;
+  ma20DiffPct: number;
+  high20d: number;
+  low20d: number;
+  high120d: number;
+  low120d: number;
+  /** 当前价处于近120日高低点区间的分位值 (0 ~ 100) */
+  percentile120d: number;
+  /** 较近120日高点回撤比例（负数，如 -0.215 表示 -21.5%） */
+  drawdownFrom120dHighPct: number;
+  volumeRatio20d: number | null;
+  volumeSignal: string;
+  /** 建仓击球区指导 */
+  entryBuyPrice: number;
+  entryBuyDistancePct: number;
+  entryBuyAnchor: string;
+  strongSupportPrice: number;
+  strongSupportAnchor: string;
+  strategyModeLabel: string;
+  /** 研判点评（优先展示 AI 点评，回退至规则点评） */
+  comment: string;
+  commentSource: "ai" | "rules";
+  /** 迷你周均趋势曲线点（复用 CycleTrendSparkline） */
+  weeklySeries: MarketTrendPoint[];
+}
+
+/** 潜力基金雷达全局视图数据 */
+export interface PotentialFundsOverview {
+  updatedAt: string;
+  source: "ai" | "rules";
+  model?: string | null;
+  channelId?: string | null;
+  channelHost?: string | null;
+  latencyMs?: number | null;
+  headline: string;
+  allocationAdvice: string;
+  totalCount: number;
+  primeCount: number;
+  bottomAmbushCount: number;
+  rightBreakoutCount: number;
+  items: PotentialFundItem[];
+}
+
 export interface MarketsAnswer {
   quotes: MarketQuote[];
   /** Latest USD/CNY exchange rate used for conversions. */
@@ -595,4 +679,6 @@ export interface MarketsAnswer {
   aviationAnalysis?: PorkMarketAnalysis | null;
   /** Consolidated analysis for the Hang Seng Tech Index & ETF (513180). */
   hstechAnalysis?: PorkMarketAnalysis | null;
+  /** 跨赛道潜力基金与机会雷达 */
+  potentialFunds?: PotentialFundsOverview | null;
 }

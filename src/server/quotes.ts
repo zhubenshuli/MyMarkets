@@ -22,6 +22,7 @@ import {
   compute516670PositionPlan,
   compute600115PositionPlan,
 } from "./position.ts";
+import { readPotentialFundsOverview, refreshPotentialFundsDaily } from "./funds.ts";
 import { addDays, beijingDate, beijingTime } from "../shared/time.ts";
 import type {
   Etf516670Guidance,
@@ -702,8 +703,8 @@ const HISTORY = 90;
 const SINA_FUTURES_URL = "https://stock2.finance.sina.com.cn/futures/api/json.php/GlobalFuturesService.getGlobalFuturesDailyKLine";
 const SINA_INNER_FUTURES_URL = "http://stock2.finance.sina.com.cn/futures/api/jsonp.php/var_kline=/InnerFuturesNewService.getDailyKLine";
 const SINA_INNER_LIVE_URL = "https://hq.sinajs.cn/list=";
-const TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get";
-const EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get";
+export const TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get";
+export const EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get";
 const YANGZHU_HITS_URL = "https://xt.yangzhu.vip/data/getzhujiahitsdata";
 const MOA_FARM_DAILY_URL = "https://pfsc.agri.cn/api/FarmDaily/list?pageNum=1&pageSize=85";
 const ZHUE_CURE_URL = "https://bj.zhue.com.cn/zoushi.php";
@@ -2856,7 +2857,8 @@ export async function refreshMarkets(
   const isPork = category === "pork";
   const isAviation = category === "aviation";
   const isHstech = category === "hstech";
-  const isDailySector = isPork || isAviation || isHstech;
+  const isFunds = category === "funds";
+  const isDailySector = isPork || isAviation || isHstech || isFunds;
   const isMacro = category === "macro";
   const known = getDistinctSymbols();
   const written: Record<string, number> = {};
@@ -2942,6 +2944,15 @@ export async function refreshMarkets(
       }
     } catch {
       // Non-blocking if analysis persistence encounters transient failure
+    }
+  }
+
+  if (isFunds || category === "all") {
+    try {
+      await refreshPotentialFundsDaily(now, opts);
+      written.potential_funds = 1;
+    } catch {
+      // Non-blocking
     }
   }
 
@@ -3964,7 +3975,16 @@ export async function readMarkets(opts?: { skipAnalysis?: boolean }): Promise<Ma
     }
   }
 
-  return { quotes, usdCnyRate, analysis, aviationAnalysis, hstechAnalysis };
+  let potentialFunds = null;
+  if (!opts?.skipAnalysis) {
+    try {
+      potentialFunds = await readPotentialFundsOverview(opts?.skipAnalysis);
+    } catch {
+      // Non-blocking fallback
+    }
+  }
+
+  return { quotes, usdCnyRate, analysis, aviationAnalysis, hstechAnalysis, potentialFunds };
 }
 
 /** Daily closes older than half a year are past what the page reads; quarterly capacity rows keep 3 years (ops.retention). */

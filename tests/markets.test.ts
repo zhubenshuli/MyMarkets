@@ -23,6 +23,13 @@ import {
   reviewIntradayWithAi,
 } from "../src/server/intraday.ts";
 import {
+  evaluatePotentialFund,
+  getPotentialFundsWatchlist,
+  removePotentialFundFromWatchlist,
+  resetPotentialFundsWatchlist,
+  DEFAULT_POTENTIAL_FUNDS,
+} from "../src/server/funds.ts";
+import {
   getChannelsOverview,
   loadChannels,
   recordChannelFailure,
@@ -1406,6 +1413,67 @@ test("position plan optimizations: drawdown paired-swing sell1, extended rally M
     "in deep drawdown with excess swing lots, sell1 uses paired buy basis (0.540) to allow +2.5%~+3.5% swing T instead of deadlocking above overall dilutedCost (0.5734)",
   );
   assert.ok(ddSell1.estimatedNetProfit! > 10, "paired swing T still yields positive net profit into profitPool");
+});
+
+test("potential funds: dual-track scoring (bottom ambush vs right breakout) and watchlist management", () => {
+  clearDb();
+
+  // 1. Watchlist CRUD & Defaults
+  const initialList = getPotentialFundsWatchlist();
+  assert.equal(initialList.length, 10, "Default potential funds watchlist has 10 ETFs");
+  assert.ok(initialList.some((f) => f.code === "512170"), "Includes 512170 医疗ETF");
+  assert.ok(initialList.some((f) => f.code === "512480"), "Includes 512480 半导体ETF");
+
+  const removed = removePotentialFundFromWatchlist("512170");
+  assert.equal(removed, true, "Successfully removes 512170 from watchlist");
+  const afterRemoveList = getPotentialFundsWatchlist();
+  assert.equal(afterRemoveList.length, 9, "Watchlist length is now 9");
+  assert.equal(afterRemoveList.some((f) => f.code === "512170"), false);
+
+  const resetList = resetPotentialFundsWatchlist();
+  assert.equal(resetList.length, 10, "Reset restores 10 default ETFs");
+  assert.ok(resetList.some((f) => f.code === "512170"));
+
+  // 2. Dual-track evaluation: Bottom Ambush
+  // Construct a series of 120 days: early days high (1.000), recent days oversold near 0.500
+  const oversoldSeries = Array.from({ length: 120 }, (_, i) => {
+    const day = addDays("2026-10-01", i);
+    // starts at 1.000, slowly drifts down to 0.510, with low at 0.500
+    const close = i < 30 ? 1.0 - (i * 0.005) : 0.85 - ((i - 30) * 0.0038);
+    return { day, close: Math.max(0.500, close) };
+  });
+  // Set last day to 0.510, min to 0.500, max to 1.000
+  oversoldSeries[oversoldSeries.length - 1] = { day: addDays("2026-10-01", 119), close: 0.510 };
+
+  const bottomFund = evaluatePotentialFund(
+    { code: "512170", fullCode: "sh512170", name: "医疗ETF", sectorTag: "医药医疗" },
+    oversoldSeries,
+  );
+
+  assert.equal(bottomFund.track, "bottom_ambush", "Deep drawdown and low percentile triggers bottom_ambush track");
+  assert.ok(bottomFund.percentile120d <= 20, "120-day percentile is deeply low");
+  assert.ok(bottomFund.drawdownFrom120dHighPct <= -0.40, "Drawdown from 120-day high is <= -40%");
+  assert.ok(bottomFund.score >= 70, "Oversold turnaround score is high");
+  assert.ok(bottomFund.entryBuyPrice <= 0.520, "entryBuyPrice anchors near 120d bottom");
+  assert.ok(bottomFund.strongSupportPrice <= 0.510, "strongSupportPrice anchors at or below 120d low");
+
+  // 3. Dual-track evaluation: Right Breakout
+  // Construct a bullish trend series where price rises steadily from 0.500 to 0.950, price > MA10 > MA20 > MA60
+  const breakoutSeries = Array.from({ length: 120 }, (_, i) => {
+    const day = addDays("2026-10-01", i);
+    const close = 0.500 + i * 0.0038; // rises to ~0.952
+    return { day, close };
+  });
+
+  const breakoutFund = evaluatePotentialFund(
+    { code: "512480", fullCode: "sh512480", name: "半导体ETF", sectorTag: "半导体芯片" },
+    breakoutSeries,
+  );
+
+  assert.equal(breakoutFund.track, "right_breakout", "Bullish moving average alignment and upward momentum triggers right_breakout track");
+  assert.ok(breakoutFund.percentile120d >= 70, "Breakout fund is in upper water-level");
+  assert.ok(breakoutFund.score >= 70, "Breakout score is high (>70)");
+  assert.ok(breakoutFund.entryBuyPrice < breakoutFund.price, "entryBuyPrice anchors at MA10/MA20 pullback level");
 });
 
 

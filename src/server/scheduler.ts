@@ -1,4 +1,5 @@
 import { countTotalCloses } from "./db.ts";
+import { refreshPotentialFundsDaily } from "./funds.ts";
 import {
   pruneMarkets,
   refreshAviationDaily,
@@ -69,6 +70,8 @@ export function startScheduler(): void {
       void runTask("markets.aviation.daily", () => refreshAviationDaily(now));
     } else if (hm === "00:10") {
       void runTask("markets.hstech.daily", () => refreshHstechDaily(now));
+    } else if (hm === "00:15") {
+      void runTask("markets.funds.daily", () => refreshPotentialFundsDaily(now));
     } else if (hm === "03:30") {
       void runTask("markets.retention", () => pruneMarkets(now));
     } else if (minute % 10 === 0) {
