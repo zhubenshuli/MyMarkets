@@ -1,6 +1,6 @@
 // Standalone Markets page: domestic pork, civil aviation, Hang Seng Tech, and macro benchmarks
 // with AI/rule-based cyclical analysis, weekly/quarterly trend curves, and mobile-responsive layout.
-import { Fragment, useEffect, useState } from "react";
+import { Component, Fragment, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 import { beijingDateTimeSec, beijingStamp, monthDay } from "../shared/time.ts";
 import { LlmChannelsPanel } from "./components/LlmChannelsPanel.tsx";
 import { DilutedCostChart, PositionPlanPanel } from "./components/PositionPlanPanel.tsx";
@@ -1168,6 +1168,45 @@ function ConsolidatedPorkSummaryCard({
   );
 }
 
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="card p-6 border border-hot/30 bg-hot-soft text-ink space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">⚠️</span>
+            <h3 className="text-base font-bold text-hot">页面组件渲染异常</h3>
+          </div>
+          <p className="text-xs text-ink-3 font-mono bg-surface p-3 rounded border border-line">
+            {this.state.error?.message || "未知渲染错误"}
+          </p>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false, error: null })}
+            className="rounded-control bg-accent text-accent-contrast px-3.5 py-1.5 text-xs font-semibold hover:bg-accent-hover transition-colors"
+          >
+            重试恢复
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function MarketsPage() {
   const [data, setData] = useState<MarketsAnswer>({
     quotes: [],
@@ -1558,124 +1597,123 @@ export default function MarketsPage() {
 
         {/* Main Workspace Container */}
         <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 pb-12">
-          {currentTab.key === "models" ? (
-            <LlmChannelsPanel
-              porkAnalysis={analysis}
-              aviationAnalysis={aviationAnalysis}
-              hstechAnalysis={hstechAnalysis}
-              onSelectSector={handleSelectTab}
-              onTriggerRefresh={handleManualRefresh}
-              refreshingTarget={refreshingTarget}
-            />
-          ) : loading && quotes.length === 0 ? (
-            <div className="card p-8 text-center text-[13.5px] text-ink-3">正在加载行情数据…</div>
-          ) : quotes.length === 0 ? (
-            <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无行情数据，等待下一次定时更新。</div>
-          ) : (
-            <div>
-              {/* Tab: 生猪产业链 (单卡片汇总 + AI研判 + 516670指南 + 9大核心指标看板) */}
-              {currentTab.key === "pork" && (
-                activeQuotes.length > 0 ? (
-                  <ConsolidatedPorkSummaryCard
-                    quotes={activeQuotes}
-                    analysis={analysis}
-                    sector="pork"
-                    onOpenModels={() => handleSelectTab("models")}
-                    onManualRefresh={() => void handleManualRefresh("pork", "all")}
-                    refreshingTarget={refreshingTarget}
-                    feedbackNotice={sectorNotices.pork}
-                    onMarketsUpdated={setData}
-                  />
-                ) : (
-                  <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无生猪产业链数据。</div>
-                )
-              )}
+          <ErrorBoundary key={currentTab.key}>
+            {currentTab.key === "models" ? (
+              <LlmChannelsPanel
+                porkAnalysis={analysis}
+                aviationAnalysis={aviationAnalysis}
+                hstechAnalysis={hstechAnalysis}
+                onSelectSector={handleSelectTab}
+                onTriggerRefresh={handleManualRefresh}
+                refreshingTarget={refreshingTarget}
+              />
+            ) : currentTab.key === "funds" ? (
+              <PotentialFundsPanel
+                overview={data.potentialFunds}
+                onMarketsUpdated={setData}
+                onTriggerRefresh={handleManualRefresh}
+                refreshing={refreshingTarget === "funds"}
+              />
+            ) : loading && quotes.length === 0 ? (
+              <div className="card p-8 text-center text-[13.5px] text-ink-3">正在加载行情数据…</div>
+            ) : quotes.length === 0 ? (
+              <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无行情数据，等待下一次定时更新。</div>
+            ) : (
+              <div>
+                {/* Tab: 生猪产业链 (单卡片汇总 + AI研判 + 516670指南 + 9大核心指标看板) */}
+                {currentTab.key === "pork" && (
+                  activeQuotes.length > 0 ? (
+                    <ConsolidatedPorkSummaryCard
+                      quotes={activeQuotes}
+                      analysis={analysis}
+                      sector="pork"
+                      onOpenModels={() => handleSelectTab("models")}
+                      onManualRefresh={() => void handleManualRefresh("pork", "all")}
+                      refreshingTarget={refreshingTarget}
+                      feedbackNotice={sectorNotices.pork}
+                      onMarketsUpdated={setData}
+                    />
+                  ) : (
+                    <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无生猪产业链数据。</div>
+                  )
+                )}
 
-              {/* Tab: 航空业 (单卡片汇总 + AI研判 + 中国东航600115指南 + 8大核心指标看板) */}
-              {currentTab.key === "aviation" && (
-                activeQuotes.length > 0 ? (
-                  <ConsolidatedPorkSummaryCard
-                    quotes={activeQuotes}
-                    analysis={aviationAnalysis}
-                    sector="aviation"
-                    onOpenModels={() => handleSelectTab("models")}
-                    onManualRefresh={() => void handleManualRefresh("aviation", "all")}
-                    refreshingTarget={refreshingTarget}
-                    feedbackNotice={sectorNotices.aviation}
-                    onMarketsUpdated={setData}
-                  />
-                ) : (
-                  <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无航空业产业链数据。</div>
-                )
-              )}
+                {/* Tab: 航空业 (单卡片汇总 + AI研判 + 中国东航600115指南 + 8大核心指标看板) */}
+                {currentTab.key === "aviation" && (
+                  activeQuotes.length > 0 ? (
+                    <ConsolidatedPorkSummaryCard
+                      quotes={activeQuotes}
+                      analysis={aviationAnalysis}
+                      sector="aviation"
+                      onOpenModels={() => handleSelectTab("models")}
+                      onManualRefresh={() => void handleManualRefresh("aviation", "all")}
+                      refreshingTarget={refreshingTarget}
+                      feedbackNotice={sectorNotices.aviation}
+                      onMarketsUpdated={setData}
+                    />
+                  ) : (
+                    <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无航空业产业链数据。</div>
+                  )
+                )}
 
-              {/* Tab: 恒生科技 (单卡片汇总 + AI研判 + 恒生科技ETF 513180指南 + 8大核心指标看板) */}
-              {currentTab.key === "hstech" && (
-                activeQuotes.length > 0 ? (
-                  <ConsolidatedPorkSummaryCard
-                    quotes={activeQuotes}
-                    analysis={hstechAnalysis}
-                    sector="hstech"
-                    onOpenModels={() => handleSelectTab("models")}
-                    onManualRefresh={() => void handleManualRefresh("hstech", "all")}
-                    refreshingTarget={refreshingTarget}
-                    feedbackNotice={sectorNotices.hstech}
-                    onMarketsUpdated={setData}
-                  />
-                ) : (
-                  <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无恒生科技板块数据。</div>
-                )
-              )}
+                {/* Tab: 恒生科技 (单卡片汇总 + AI研判 + 恒生科技ETF 513180指南 + 8大核心指标看板) */}
+                {currentTab.key === "hstech" && (
+                  activeQuotes.length > 0 ? (
+                    <ConsolidatedPorkSummaryCard
+                      quotes={activeQuotes}
+                      analysis={hstechAnalysis}
+                      sector="hstech"
+                      onOpenModels={() => handleSelectTab("models")}
+                      onManualRefresh={() => void handleManualRefresh("hstech", "all")}
+                      refreshingTarget={refreshingTarget}
+                      feedbackNotice={sectorNotices.hstech}
+                      onMarketsUpdated={setData}
+                    />
+                  ) : (
+                    <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无恒生科技板块数据。</div>
+                  )
+                )}
 
-              {/* Tab: 全球大宗与股指 (4项基准指标) */}
-              {currentTab.key === "macro" && (
-                <div>
-                  <div className="border-b border-line pb-2.5 mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div>
-                      <h2 className="text-[18px] font-bold text-ink">全球大宗商品与主要指数</h2>
-                      <p className="mt-0.5 text-[12px] text-ink-3">
-                        布伦特原油、伦敦现货黄金（1 金衡盎司 ≈ 31.1035 克{usdCnyRate ? `，参考汇率 USD/CNY ${usdCnyRate.toFixed(4)}` : ""}）、上证指数与恒生科技指数
-                      </p>
+                {/* Tab: 全球大宗与股指 (4项基准指标) */}
+                {currentTab.key === "macro" && (
+                  <div>
+                    <div className="border-b border-line pb-2.5 mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <h2 className="text-[18px] font-bold text-ink">全球大宗商品与主要指数</h2>
+                        <p className="mt-0.5 text-[12px] text-ink-3">
+                          布伦特原油、伦敦现货黄金（1 金衡盎司 ≈ 31.1035 克{usdCnyRate ? `，参考汇率 USD/CNY ${usdCnyRate.toFixed(4)}` : ""}）、上证指数与恒生科技指数
+                        </p>
+                      </div>
                     </div>
+                    {activeQuotes.length > 0 ? (
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4">
+                        {activeQuotes.map((q) => (
+                          <MacroPanel key={q.symbol} q={q} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无大宗与指数数据。</div>
+                    )}
                   </div>
-                  {activeQuotes.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4">
+                )}
+
+                {/* 默认兜底：未来增加新 Tab（如粮食作物、能源化工等）时的通用自适应渲染 */}
+                {currentTab.key !== "pork" && currentTab.key !== "aviation" && currentTab.key !== "hstech" && currentTab.key !== "macro" && currentTab.key !== "funds" && (
+                  <div>
+                    <div className="border-b border-line pb-2 mb-4">
+                      <h2 className="text-[17px] font-bold text-ink">{currentTab.label}</h2>
+                      <p className="mt-0.5 text-[12px] text-ink-3">{currentTab.description}</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
                       {activeQuotes.map((q) => (
                         <MacroPanel key={q.symbol} q={q} />
                       ))}
                     </div>
-                  ) : (
-                    <div className="card p-8 text-center text-[13.5px] text-ink-3">暂无大宗与指数数据。</div>
-                  )}
-                </div>
-              )}
-
-              {/* Tab: 潜力基金雷达 (双轨机会雷达 + 120日估值水位 + 首笔建仓/强支撑防守) */}
-              {currentTab.key === "funds" && (
-                <PotentialFundsPanel
-                  overview={data.potentialFunds}
-                  onMarketsUpdated={setData}
-                  onTriggerRefresh={handleManualRefresh}
-                  refreshing={refreshingTarget === "funds"}
-                />
-              )}
-
-              {/* 默认兜底：未来增加新 Tab（如粮食作物、能源化工等）时的通用自适应渲染 */}
-              {currentTab.key !== "pork" && currentTab.key !== "aviation" && currentTab.key !== "hstech" && currentTab.key !== "macro" && currentTab.key !== "funds" && (
-                <div>
-                  <div className="border-b border-line pb-2 mb-4">
-                    <h2 className="text-[17px] font-bold text-ink">{currentTab.label}</h2>
-                    <p className="mt-0.5 text-[12px] text-ink-3">{currentTab.description}</p>
                   </div>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                    {activeQuotes.map((q) => (
-                      <MacroPanel key={q.symbol} q={q} />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

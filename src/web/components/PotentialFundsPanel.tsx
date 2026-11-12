@@ -17,6 +17,12 @@ const TONE_BADGE_CLASSES: Record<PorkStatusTone, string> = {
   neutral: "text-ink-2 bg-bg-sunk border-line",
 };
 
+const fmt = (v: number | null | undefined, digits = 3): string =>
+  typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits) : "—";
+
+const fmtPct = (v: number | null | undefined, digits = 1): string =>
+  typeof v === "number" && Number.isFinite(v) ? `${(v * 100).toFixed(digits)}%` : "—";
+
 /** Mini cycle sparkline for potential funds */
 function FundSparkline({
   points,
@@ -25,10 +31,13 @@ function FundSparkline({
   points: PotentialFundItem["weeklySeries"];
   referenceLine?: number | null;
 }) {
-  if (!points || points.length < 2) {
+  if (!points || !Array.isArray(points) || points.length < 2) {
     return <span className="text-[11px] text-ink-4">—</span>;
   }
-  const values = points.map((p) => p.close);
+  const values = points.map((p) => p.close).filter((v) => typeof v === "number" && Number.isFinite(v));
+  if (values.length < 2) {
+    return <span className="text-[11px] text-ink-4">—</span>;
+  }
   const dataMin = Math.min(...values);
   const dataMax = Math.max(...values);
 
@@ -51,9 +60,9 @@ function FundSparkline({
     return { x, y };
   });
   const polyline = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
-  const lastCoord = coords.at(-1)!;
-  const firstVal = points[0]!.close;
-  const lastVal = points.at(-1)!.close;
+  const lastCoord = coords[coords.length - 1] ?? coords[0]!;
+  const firstVal = points[0]?.close ?? 0;
+  const lastVal = points[points.length - 1]?.close ?? 0;
   const netDiff = lastVal - firstVal;
   const strokeTone = Math.abs(netDiff) < 1e-4 ? "text-ink-4" : netDiff > 0 ? "text-hot" : "text-ok";
 
@@ -444,7 +453,7 @@ export function PotentialFundsPanel({
                     <div>
                       <div className="flex items-baseline gap-2">
                         <span className="num text-[22px] font-bold tracking-tight text-ink">
-                          ¥{item.price.toFixed(3)}
+                          ¥{fmt(item.price)}
                         </span>
                         <span
                           className={`num text-[12px] font-semibold ${
@@ -455,8 +464,8 @@ export function PotentialFundsPanel({
                                 : "text-ink-4"
                           }`}
                         >
-                          {item.changeYesterday !== null
-                            ? `${item.changeYesterday > 0 ? "+" : ""}${(item.changeYesterday * 100).toFixed(2)}%`
+                          {item.changeYesterday !== null && item.changeYesterday !== undefined
+                            ? `${item.changeYesterday > 0 ? "+" : ""}${fmtPct(item.changeYesterday, 2)}`
                             : "—"}
                         </span>
                       </div>
@@ -472,8 +481,8 @@ export function PotentialFundsPanel({
                                   : "text-ink-4"
                             }`}
                           >
-                            {item.change1m !== null
-                              ? `${item.change1m > 0 ? "+" : ""}${(item.change1m * 100).toFixed(1)}%`
+                            {item.change1m !== null && item.change1m !== undefined
+                              ? `${item.change1m > 0 ? "+" : ""}${fmtPct(item.change1m, 1)}`
                               : "—"}
                           </b>
                         </span>
@@ -481,7 +490,7 @@ export function PotentialFundsPanel({
                         <span>
                           距高点:{" "}
                           <b className="font-semibold text-ok">
-                            -{(item.drawdownFrom120dHighPct * 100).toFixed(1)}%
+                            -{fmtPct(Math.abs(item.drawdownFrom120dHighPct ?? 0), 1)}
                           </b>
                         </span>
                       </div>
@@ -490,10 +499,10 @@ export function PotentialFundsPanel({
                     <div className="flex flex-col items-end gap-1">
                       <div className="flex items-center gap-1.5">
                         <span className="num text-[18px] font-bold text-ink">
-                          {item.score}
+                          {item.score ?? 50}
                         </span>
                         <span className={`rounded px-1.5 py-0.5 text-[10.5px] font-bold border ${badgeClass}`}>
-                          {item.tierLabel}
+                          {item.tierLabel || "待机"}
                         </span>
                       </div>
                       <FundSparkline points={item.weeklySeries} referenceLine={item.entryBuyPrice} />
@@ -505,27 +514,31 @@ export function PotentialFundsPanel({
                     <div className="flex items-center justify-between text-[11px] text-ink-3">
                       <span>120日估值水位</span>
                       <span className="font-semibold text-ink">
-                        {item.percentile120d}% 分位
-                        {item.percentile120d <= 25 ? " (深度低估)" : item.percentile120d >= 75 ? " (高位防守)" : " (中位震荡)"}
+                        {fmt(item.percentile120d, 1)}% 分位
+                        {(item.percentile120d ?? 50) <= 25
+                          ? " (深度低估)"
+                          : (item.percentile120d ?? 50) >= 75
+                            ? " (高位防守)"
+                            : " (中位震荡)"}
                       </span>
                     </div>
 
                     <div className="relative h-2 w-full rounded-full bg-bg-sunk overflow-hidden border border-line-soft">
                       <div
                         className={`h-full rounded-full transition-all ${
-                          item.percentile120d <= 25
+                          (item.percentile120d ?? 50) <= 25
                             ? "bg-ok"
-                            : item.percentile120d <= 60
+                            : (item.percentile120d ?? 50) <= 60
                               ? "bg-accent"
                               : "bg-amber"
                         }`}
-                        style={{ width: `${Math.min(100, Math.max(4, item.percentile120d))}%` }}
+                        style={{ width: `${Math.min(100, Math.max(4, item.percentile120d ?? 50))}%` }}
                       />
                     </div>
 
                     <div className="flex items-center justify-between text-[10px] text-ink-4">
-                      <span>120日低: ¥{item.low120d.toFixed(3)}</span>
-                      <span>120日高: ¥{item.high120d.toFixed(3)}</span>
+                      <span>120日低: ¥{fmt(item.low120d)}</span>
+                      <span>120日高: ¥{fmt(item.high120d)}</span>
                     </div>
                   </div>
 
@@ -543,7 +556,7 @@ export function PotentialFundsPanel({
                         {isNearEntry
                           ? "已进入建议区间"
                           : diffPctToBuy > 0
-                            ? `距建仓位需跌 ${diffPctToBuy.toFixed(1)}%`
+                            ? `距建仓位需跌 ${fmt(diffPctToBuy, 1)}%`
                             : "已击穿首笔买点"}
                       </span>
                     </div>
@@ -552,41 +565,41 @@ export function PotentialFundsPanel({
                       <div className="rounded bg-surface p-2 border border-line">
                         <div className="text-[10px] text-ink-4">建议首笔建仓价</div>
                         <div className="num text-[14px] font-bold text-accent-ink mt-0.5">
-                          ¥{item.entryBuyPrice.toFixed(3)}
+                          ¥{fmt(item.entryBuyPrice)}
                         </div>
                         <div className="text-[9.5px] text-ink-4 truncate mt-0.5" title={item.entryBuyAnchor}>
-                          {item.entryBuyAnchor}
+                          {item.entryBuyAnchor || "估值支撑位"}
                         </div>
                       </div>
 
                       <div className="rounded bg-surface p-2 border border-line">
                         <div className="text-[10px] text-ink-4">强支撑防守线</div>
                         <div className="num text-[14px] font-bold text-ink-2 mt-0.5">
-                          ¥{item.strongSupportPrice.toFixed(3)}
+                          ¥{fmt(item.strongSupportPrice)}
                         </div>
                         <div className="text-[9.5px] text-ink-4 truncate mt-0.5" title={item.strongSupportAnchor}>
-                          {item.strongSupportAnchor}
+                          {item.strongSupportAnchor || "大级别历史底"}
                         </div>
                       </div>
                     </div>
 
                     <div className="text-[10.5px] text-ink-3 font-medium flex items-center justify-between pt-0.5">
-                      <span>策略导向: {item.strategyModeLabel}</span>
+                      <span>策略导向: {item.strategyModeLabel || "区间震荡跟踪"}</span>
                     </div>
                   </div>
 
                   {/* AI / Quant Commentary */}
                   <div className="text-[11.5px] text-ink-2 bg-surface rounded p-2.5 border border-line-soft leading-relaxed flex items-start gap-1.5">
                     <span className="shrink-0 text-accent font-bold">💡</span>
-                    <span>{item.aiComment || item.thesis}</span>
+                    <span>{item.aiComment || item.comment || item.thesis}</span>
                   </div>
                 </div>
 
-                {/* Card Sub-footer: MA levels */}
+                {/* Card Sub-footer: MA & Range levels */}
                 <div className="mt-3 pt-2.5 border-t border-line-soft flex items-center justify-between text-[10px] text-ink-4">
-                  <span>MA10: ¥{item.ma10.toFixed(3)}</span>
-                  <span>MA20: ¥{item.ma20.toFixed(3)}</span>
-                  <span>MA60: ¥{item.ma60.toFixed(3)}</span>
+                  <span>MA10: ¥{fmt(item.ma10)}</span>
+                  <span>MA20: ¥{fmt(item.ma20)}</span>
+                  <span>20日震荡: ¥{fmt(item.low20d)} ~ ¥{fmt(item.high20d)}</span>
                 </div>
               </div>
             );
